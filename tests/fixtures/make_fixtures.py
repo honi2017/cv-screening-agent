@@ -1,0 +1,174 @@
+"""Generate fixture CVs as real PDFs at test time.
+
+Keeping generation in code (rather than committing binaries) means fixtures are
+reviewable, and lets us build pathological cases — white-on-white text, 2pt
+fonts — that are hard to author by hand.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pymupdf
+
+CLEAN = """Alex Morgan
+alex.morgan@example.com | +1 415 555 0134 | Boston, MA
+linkedin.com/in/alexmorgan
+
+EXPERIENCE
+
+Staff Forward Deployed Engineer, Northwind Data (2019-03 - Present)
+- Owned the client integration platform end to end: 40 enterprise tenants, SFTP
+  and REST ingestion, 12M records/day, on-call rotation for 4 years.
+- Led discovery workshops with law firms and hedge funds to scope data migrations,
+  then translated findings into integration designs the client signed off on.
+- Rolled out Okta and Azure AD SAML SSO for 18 clients, cutting onboarding from
+  6 weeks to 9 days.
+- Generalised a one-off Salesforce sync built for Redwood Capital into a reusable
+  CRM connector now used by 22 tenants.
+
+Senior Engineer, Beacon Systems (2015-06 - 2019-02)
+- Built the PostgreSQL to Snowflake replication service behind the reporting suite.
+- Ran SMTP deliverability for transactional mail, moving bounce rate 4.1% to 0.6%.
+
+EDUCATION
+BSc Computer Science, State University
+
+SKILLS
+Python, Go, PostgreSQL, Snowflake, SFTP, SAML, OIDC, Salesforce, Terraform, AWS
+"""
+
+PLACEHOLDER = """[Your Name]
+[Your Email] | [Your Phone]
+
+SUMMARY
+Results-driven engineer excited to join [Company Name] as a [Position Title].
+
+EXPERIENCE
+
+Software Engineer, Acme Corp (2018 - 2023)
+- Spearheaded cross-functional initiatives resulting in XX% efficiency gains.
+- Leveraged synergies to optimise outcomes across the organisation.
+
+EDUCATION
+BSc Computer Science, State University
+"""
+
+TEMPLATE_SHARED_BULLETS = """- Spearheaded cross-functional initiatives resulting in 40% efficiency gains
+- Leveraged cutting-edge technologies to optimise operational outcomes by 35%
+- Orchestrated stakeholder alignment resulting in 50% faster delivery cycles
+- Facilitated seamless collaboration driving 25% improvement in team velocity
+"""
+
+TEMPLATE_A = f"""Jordan Blake
+jordan.blake@example.com | Austin, TX
+
+EXPERIENCE
+Senior Software Engineer, Globex (2017 - 2024)
+{TEMPLATE_SHARED_BULLETS}
+EDUCATION
+BSc Information Systems, State University
+"""
+
+TEMPLATE_B = f"""Riley Chen
+riley.chen@example.com | Denver, CO
+
+EXPERIENCE
+Lead Engineer, Initech (2016 - 2023)
+{TEMPLATE_SHARED_BULLETS}
+EDUCATION
+BSc Computer Engineering, State University
+"""
+
+FOUR_YEAR = """Sam Rivera
+sam.rivera@example.com | Chicago, IL
+linkedin.com/in/samrivera
+
+EXPERIENCE
+
+Software Engineer, Vertex Labs (2022-01 - Present)
+- Built the billing reconciliation service in Python, processing 800k rows daily.
+- Integrated the Stripe and NetSuite APIs behind a shared webhook gateway.
+
+Junior Engineer, Vertex Labs (2021-01 - 2021-12)
+- Maintained the internal SFTP drop used by 6 partner banks.
+
+EDUCATION
+BSc Computer Science, State University
+
+SKILLS
+Python, Stripe, NetSuite, SFTP
+"""
+
+
+def _write_text_pdf(path: Path, body: str) -> Path:
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        pymupdf.Rect(50, 50, 545, 780), body, fontsize=9, fontname="helv"
+    )
+    doc.set_metadata({"producer": "TestSuite", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _write_hidden_text_pdf(path: Path) -> Path:
+    """A visually normal CV with white-on-white and 2pt keyword stuffing."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        pymupdf.Rect(50, 50, 545, 600), CLEAN, fontsize=9, fontname="helv"
+    )
+    # White text on the default white background.
+    page.insert_text(
+        (50, 700),
+        "forward deployed engineer SAML SFTP private markets fintech",
+        fontsize=9,
+        fontname="helv",
+        color=(1, 1, 1),
+    )
+    # Micro font.
+    page.insert_text(
+        (50, 720),
+        "python go postgresql salesforce okta subscription documents",
+        fontsize=2,
+        fontname="helv",
+        color=(0, 0, 0),
+    )
+    doc.set_metadata({"producer": "TestSuite", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _write_scanned_pdf(path: Path) -> Path:
+    """A page with no extractable text, standing in for a scanned CV."""
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.draw_rect(pymupdf.Rect(60, 60, 500, 700), color=(0.4, 0.4, 0.4), width=2)
+    doc.set_metadata({"producer": "TestSuite", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def build_all(out_dir: Path) -> dict[str, Path]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return {
+        "clean": _write_text_pdf(out_dir / "clean.pdf", CLEAN),
+        "placeholder": _write_text_pdf(out_dir / "placeholder.pdf", PLACEHOLDER),
+        "template_a": _write_text_pdf(out_dir / "template_a.pdf", TEMPLATE_A),
+        "template_b": _write_text_pdf(out_dir / "template_b.pdf", TEMPLATE_B),
+        "four_year": _write_text_pdf(out_dir / "four_year.pdf", FOUR_YEAR),
+        "hidden_text": _write_hidden_text_pdf(out_dir / "hidden_text.pdf"),
+        "scanned": _write_scanned_pdf(out_dir / "scanned.pdf"),
+    }
+
+
+if __name__ == "__main__":
+    import sys
+
+    built = build_all(Path(sys.argv[1] if len(sys.argv) > 1 else "tests/fixtures/pdfs"))
+    for name, p in built.items():
+        print(f"{name}: {p}")
