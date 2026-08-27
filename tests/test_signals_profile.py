@@ -1,3 +1,5 @@
+import pytest
+
 from screen.signals import find_degree, find_linkedin, find_location
 
 
@@ -609,3 +611,138 @@ def test_atlanta_ga_two_letter_code_still_resolves_georgia():
     r = find_location("Atlanta, GA", [])
     assert r["us_evident"] is True
     assert r["timezone_hint"] == "ET"
+
+
+# --- REAL-DATA-ADDENDUM section E: ATS structured answers -----------------
+#
+# The real ATS asks every applicant four required questions. All labels below
+# are verbatim, including the inconsistent capitalisation. These lock in the
+# addendum's consequences for find_location/find_linkedin against the exact
+# measured labels and example values.
+
+_STATE_LABEL = "Please specify your current state of residence in the US"
+_REGION_LABEL = (
+    "Which region of the US are you based in? "
+    "(e.g., Northeast, Midwest, East Coast, South, West)"
+)
+_SPONSOR_LABEL = (
+    "Will you now or in the future require sponsorship for employment "
+    "visa status (e.g., H-1B visa status)?"
+)
+
+
+def test_find_linkedin_resolves_real_verbatim_label():
+    pd = [{"name": "Linkedin Profile", "value": "https://linkedin.com/in/alexmorgan"}]
+    r = find_linkedin("no link in cv", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["source"] == "trakstar"
+
+
+def test_find_linkedin_resolves_label_with_stray_leading_space():
+    pd = [{"name": " Linkedin Profile", "value": "https://linkedin.com/in/alexmorgan"}]
+    r = find_linkedin("no link in cv", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["source"] == "trakstar"
+
+
+@pytest.mark.parametrize(
+    "value,expected_tz",
+    [
+        ("Texas", "CT"),
+        ("California", "PT"),
+        ("NY", "ET"),
+        ("MD", "ET"),
+        ("FL", "ET"),
+        ("Illinois", "CT"),
+        ("Friendswood texas", "CT"),
+    ],
+)
+def test_state_of_residence_field_resolves_us_evident_and_timezone(value, expected_tz):
+    pd = [{"name": _STATE_LABEL, "value": value}]
+    r = find_location("no address in cv body", pd)
+    assert r["us_evident"] is True, f"{value!r} should resolve us_evident"
+    assert r["non_us_explicit"] is False
+    assert r["timezone_hint"] == expected_tz
+
+
+def test_state_of_residence_field_lowercase_still_resolves():
+    pd = [{"name": _STATE_LABEL, "value": "texas"}]
+    r = find_location("no address in cv body", pd)
+    assert r["us_evident"] is True
+    assert r["timezone_hint"] == "CT"
+
+
+def test_state_of_residence_general_cv_prose_comma_anchor_is_unaffected():
+    # The per-field unanchored matcher must NOT leak into the general
+    # CV-text path: an unanchored state name in prose (no ATS field at all)
+    # must still fail to resolve, exactly as before this change.
+    r = find_location("no address on this cv, just prose about texas trips", [])
+    assert r["us_evident"] is False
+    assert r["timezone_hint"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["No", "no", "N/A", "No.", "NO", "none", "Not required"],
+)
+def test_sponsorship_no_sets_work_authorized_and_suppresses_g5(value):
+    pd = [
+        {"name": "Location", "value": "Hanoi, Vietnam"},
+        {"name": _SPONSOR_LABEL, "value": value},
+    ]
+    r = find_location("no address in cv", pd)
+    assert r["work_authorized"] is True
+    assert r["needs_sponsorship"] is False
+    # Would otherwise eliminate on G5 -- sponsorship=no cancels it entirely.
+    assert r["non_us_explicit"] is False
+
+
+def test_sponsorship_yes_never_sets_non_us_explicit():
+    pd = [{"name": _SPONSOR_LABEL, "value": "Yes"}]
+    r = find_location("Boston, MA", pd)
+    assert r["needs_sponsorship"] is True
+    assert r["non_us_explicit"] is False
+
+
+def test_sponsorship_yes_does_not_grant_work_authorization():
+    pd = [{"name": _SPONSOR_LABEL, "value": "Yes"}]
+    r = find_location("no address in cv", pd)
+    assert r["work_authorized"] is False
+    assert r["needs_sponsorship"] is True
+
+
+def test_sponsorship_absent_is_neutral():
+    r = find_location("Boston, MA", [])
+    assert r["work_authorized"] is False
+    assert r["needs_sponsorship"] is False
+
+
+def test_region_answer_exposed_as_corroboration_only():
+    pd = [{"name": _REGION_LABEL, "value": "South"}]
+    r = find_location("no address in cv, nothing resolvable", pd)
+    assert r["region_raw"] == "South"
+    # Corroboration only: never promoted to us_evident/non_us_explicit.
+    assert r["us_evident"] is False
+    assert r["non_us_explicit"] is False
+    # But it does fill in the tiebreak-facing timezone hint as a fallback.
+    assert r["timezone_hint"] == "CT"
+
+
+def test_region_answer_never_overrides_authoritative_state_field():
+    # State field says California (PT); messy region field says "PST" too,
+    # so this doesn't actually conflict -- but the state field must win even
+    # when it would not agree, per "state field is authoritative".
+    pd = [
+        {"name": _STATE_LABEL, "value": "New York"},
+        {"name": _REGION_LABEL, "value": "PST"},
+    ]
+    r = find_location("no address in cv", pd)
+    assert r["timezone_hint"] == "ET"
+
+
+def test_region_answer_is_too_messy_to_use_alone_for_gating():
+    # Measured real value: "YES" for the region question. Nonsense as a
+    # region, and must never grant us_evident.
+    pd = [{"name": _REGION_LABEL, "value": "YES"}]
+    r = find_location("no address in cv", pd)
+    assert r["us_evident"] is False

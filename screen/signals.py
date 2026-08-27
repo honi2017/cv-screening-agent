@@ -381,6 +381,17 @@ _CT_STATES = frozenset("IL WI MN IA MO AR LA MS AL TN KY KS NE SD ND OK TX".spli
 _MT_STATES = frozenset("MT WY CO NM UT ID AZ".split())
 _PT_STATES = frozenset("WA OR CA NV AK HI".split())
 
+# Merged code->timezone lookup, reused by the per-field state-of-residence
+# matcher below so each two-letter code's timezone is defined in exactly one
+# place.
+_STATE_CODE_TZ = {
+    code: tz
+    for tz, codes in (
+        ("ET", _ET_STATES), ("CT", _CT_STATES), ("MT", _MT_STATES), ("PT", _PT_STATES),
+    )
+    for code in codes
+}
+
 _US_HINT_RE = re.compile(
     r",\s*([A-Z]{2})\b(?:\s+\d{5})?"
     r"|\b(United States|USA|U\.S\.A\.?|U\.S\.?|US)(?!\w)"
@@ -427,6 +438,67 @@ _US_STATE_NAME_RE = re.compile(
     re.I,
 )
 
+# --- Per-field state matching for the ATS "state of residence" answer -----
+#
+# The rule above is deliberately comma-anchored for CV prose (see its comment).
+# This one is NOT, and that is deliberate too, and it is scoped to exactly one
+# field: the real ATS's required "Please specify your current state of
+# residence in the US" answer (REAL-DATA-ADDENDUM section E) is never "City,
+# State" prose -- its value IS the state, verbatim examples include "Texas",
+# "FL", "Friendswood texas" -- so the comma-anchored regex above never matches
+# it and this authoritative field would otherwise be silently ignored.
+#
+# Do NOT reuse this matcher on free CV text or any other ATS field: an
+# unanchored state name there is exactly the bug _US_STATE_NAME_RE's comma
+# anchor exists to prevent (see its comment above) -- it cancelled genuine
+# non-US detections and fabricated timezones from candidates' own first
+# names. This function is per-field and must stay that way.
+_US_STATE_NAME_UNANCHORED_RE = re.compile(
+    r"\b(" + "|".join(sorted(_US_STATE_TIMEZONES, key=len, reverse=True)) + r")\b",
+    re.I,
+)
+
+
+def _match_state_of_residence(value: str | None) -> str | None:
+    """Timezone for a bare state-of-residence answer, matched unanchored and
+    case-insensitively -- see the comment above for why this is safe only for
+    that one ATS field.
+    """
+    if not value:
+        return None
+    stripped = value.strip()
+    tokens = re.findall(r"[A-Za-z]+", stripped)
+    # A single bare two-letter token ("FL", "ny") is unambiguously a state
+    # code here -- the whole answer is nothing else. Inside a longer answer
+    # ("Friendswood texas") only an UPPERCASE two-letter token counts as a
+    # code, so an incidental lowercase connector word can never be misread as
+    # one; the full-name regex below still resolves those answers via the
+    # state's spelled-out name.
+    if len(tokens) == 1 and len(tokens[0]) == 2:
+        tz = _STATE_CODE_TZ.get(tokens[0].upper())
+        if tz:
+            return tz
+    else:
+        for token in tokens:
+            if len(token) == 2 and token.isupper():
+                tz = _STATE_CODE_TZ.get(token)
+                if tz:
+                    return tz
+    m = _US_STATE_NAME_UNANCHORED_RE.search(stripped)
+    if m:
+        return _US_STATE_TIMEZONES[m.group(1).lower()]
+    return None
+
+
+def _state_residence_value(profile_data: list[dict[str, Any]]) -> str | None:
+    for item in profile_data or []:
+        if _normalize_label(item.get("name", "")) == _STATE_RESIDENCE_LABEL:
+            value = str(item.get("value", "")).strip()
+            if value:
+                return value
+    return None
+
+
 # "viet nam" is ordered before "vietnam" and "united kingdom" stays ahead of
 # any of its own substrings: `_is_residence_evidence` below matches a value
 # against this tuple with `endswith`, which is order-independent for `any()`
@@ -462,11 +534,19 @@ _WORK_AUTH_RE = re.compile(
 # the CV contact header and then to unknown location — and unknown location
 # flags rather than eliminates. Widening this back into a needle match would
 # reverse that, so don't.
+# The real ATS's required residence question (REAL-DATA-ADDENDUM section E).
+# Its value is authoritative -- unlike the labels below, whose values are
+# free-form CV-style addresses, this field's value IS the state, so it gets
+# its own unanchored matching path (_match_state_of_residence, above) rather
+# than the comma-anchored "City, State" regexes used for the rest.
+_STATE_RESIDENCE_LABEL = "please specify your current state of residence in the us"
+
 _LOCATION_LABELS = frozenset({
     "location", "current location", "candidate location", "location city state",
     "city", "current city", "city town", "town",
     "address", "home address", "mailing address", "street address", "current address",
     "based in", "country", "current country", "state province",
+    _STATE_RESIDENCE_LABEL,
 })
 _LABEL_NORM_RE = re.compile(r"[^a-z0-9]+")
 # A bare domain is not a place, whatever the field label says.
@@ -475,9 +555,19 @@ _NOT_A_PLACE_RE = re.compile(
 )
 
 
+def _normalize_label(name: Any) -> str:
+    """Fold an ATS field label to a comparable form: lowercase, punctuation
+    and whitespace collapsed to single spaces, leading/trailing space
+    stripped. The real API's labels are inconsistently capitalised and at
+    least one carries a stray leading space -- always compare through this,
+    never the raw label.
+    """
+    return _LABEL_NORM_RE.sub(" ", str(name).lower()).strip()
+
+
 def _profile_value(profile_data: list[dict[str, Any]]) -> str | None:
     for item in profile_data or []:
-        label = _LABEL_NORM_RE.sub(" ", str(item.get("name", "")).lower()).strip()
+        label = _normalize_label(item.get("name", ""))
         if label in _LOCATION_LABELS:
             value = str(item.get("value", "")).strip()
             if value and not _NOT_A_PLACE_RE.search(value):
@@ -513,6 +603,97 @@ def _is_residence_evidence(value: str) -> bool:
     return any(normalised.endswith(country) for country in _NON_US_COUNTRIES)
 
 
+# --- ATS structured answers: sponsorship and region (REAL-DATA-ADDENDUM E) -
+#
+# The real ATS asks every applicant two more required questions beyond
+# location and LinkedIn. Both are handled here, next to the location logic
+# they feed, rather than as a separate module -- find_location is where
+# their evidence is combined with everything else into one `non_us_explicit`
+# / `timezone_hint` decision.
+_SPONSORSHIP_LABEL = _normalize_label(
+    "Will you now or in the future require sponsorship for employment visa "
+    "status (e.g., H-1B visa status)?"
+)
+
+# Verbatim-normalised values meaning "sponsorship is NOT needed", i.e.
+# affirmative evidence of US work authorisation. Deliberately NOT stripped of
+# punctuation the way labels are -- "no." and "n/a" are compared as written,
+# just lowercased and trimmed -- because the addendum's own measured example
+# values are this exact, short list.
+_SPONSORSHIP_NOT_NEEDED = frozenset({"no", "no.", "n/a", "none", "not required"})
+
+
+def _sponsorship_value(profile_data: list[dict[str, Any]]) -> str | None:
+    for item in profile_data or []:
+        if _normalize_label(item.get("name", "")) == _SPONSORSHIP_LABEL:
+            value = str(item.get("value", "")).strip()
+            if value:
+                return value
+    return None
+
+
+def _sponsorship_evidence(value: str | None) -> tuple[bool, bool]:
+    """(work_authorized, needs_sponsorship) from the raw sponsorship answer.
+
+    "No" (in its several verbatim spellings) is affirmative evidence of US
+    work authorisation and suppresses gate G5 entirely -- exactly like a
+    CV-prose work-auth phrase already does, below. "Yes" is NEVER used to
+    eliminate: needing a visa is not evidence of non-US residence, and
+    screening on it is legally sensitive. It only raises a flag
+    (`needs_sponsorship`) for a human to weigh -- it must never set
+    `non_us_explicit`.
+    """
+    if not value:
+        return False, False
+    norm = value.strip().lower()
+    if norm in _SPONSORSHIP_NOT_NEEDED:
+        return True, False
+    if norm.startswith("yes"):
+        return False, True
+    return False, False
+
+
+# The region question's answers are measured to be too messy to trust on
+# their own ("PST", "YES" were both observed) -- see REAL-DATA-ADDENDUM
+# section E. It is corroboration only: it NEVER sets us_evident or
+# non_us_explicit, and only fills in timezone_hint (used by the tiebreak in
+# screen.rank) as a last resort, after the authoritative state-of-residence
+# field and the CV-text paths have both had a chance to resolve it.
+_REGION_LABEL = _normalize_label(
+    "Which region of the US are you based in? (e.g., Northeast, Midwest, "
+    "East Coast, South, West)"
+)
+
+_REGION_TIMEZONE_HINTS = (
+    # Longest/most specific phrase first so "east coast" wins over a bare
+    # "east" appearing inside it, etc.
+    ("northeast", "ET"), ("east coast", "ET"), ("mid atlantic", "ET"),
+    ("midwest", "CT"), ("south", "CT"), ("mountain", "MT"),
+    ("west coast", "PT"), ("west", "PT"),
+    ("est", "ET"), ("edt", "ET"), ("pst", "PT"), ("pdt", "PT"),
+    ("cst", "CT"), ("cdt", "CT"), ("mst", "MT"), ("mdt", "MT"),
+)
+
+
+def _region_value(profile_data: list[dict[str, Any]]) -> str | None:
+    for item in profile_data or []:
+        if _normalize_label(item.get("name", "")) == _REGION_LABEL:
+            value = str(item.get("value", "")).strip()
+            if value:
+                return value
+    return None
+
+
+def _region_timezone_hint(value: str | None) -> str | None:
+    if not value:
+        return None
+    low = value.lower()
+    for phrase, tz in _REGION_TIMEZONE_HINTS:
+        if phrase in low:
+            return tz
+    return None
+
+
 # LinkedIn gets the same exact-label treatment as location, for the same
 # reason (a needle like "linkedin" is safe here, but staying consistent
 # costs nothing) -- though a wrong match here only costs an -8pt penalty,
@@ -522,7 +703,7 @@ _LINKEDIN_LABELS = frozenset({"linkedin", "linkedin profile", "linkedin url"})
 
 def _linkedin_profile_value(profile_data: list[dict[str, Any]]) -> str | None:
     for item in profile_data or []:
-        label = _LABEL_NORM_RE.sub(" ", str(item.get("name", "")).lower()).strip()
+        label = _normalize_label(item.get("name", ""))
         if label in _LINKEDIN_LABELS:
             value = str(item.get("value", "")).strip()
             if value:
@@ -671,12 +852,46 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
             timezone_hint = _US_STATE_TIMEZONES[sm.group(1).lower()]
             us_evident = True
 
+    # Authoritative per-field override: the ATS "state of residence" answer
+    # (REAL-DATA-ADDENDUM section E) is looked up independently of `raw` --
+    # not through wide_scope/_US_HINT_RE/_US_STATE_NAME_RE above, which are
+    # comma-anchored for CV prose and never match a bare "Texas" or "FL" --
+    # via the dedicated unanchored, per-field matcher. A hit here always wins
+    # regardless of what the comma-anchored paths found.
+    if not us_evident:
+        state_tz = _match_state_of_residence(_state_residence_value(profile_data or []))
+        if state_tz:
+            timezone_hint, us_evident = state_tz, True
+
+    # The sponsorship answer's "no" (e.g. "No", "no.", "N/A") is affirmative
+    # evidence of US work authorisation and cancels gate G5 entirely, exactly
+    # like the CV-prose work-auth check above -- regardless of what the
+    # residence scan concluded. "Yes" never sets non_us_explicit; it can only
+    # raise the `needs_sponsorship` flag below.
+    work_authorized, needs_sponsorship = _sponsorship_evidence(
+        _sponsorship_value(profile_data or [])
+    )
+    if work_authorized:
+        non_us = False
+
     if us_evident:
         non_us = False
+
+    # Region is corroboration only (see its comment above): it never touches
+    # us_evident/non_us_explicit, and only fills in the tiebreak-facing
+    # timezone_hint when nothing authoritative already resolved it.
+    region_raw = _region_value(profile_data or [])
+    if timezone_hint == "unknown":
+        region_tz = _region_timezone_hint(region_raw)
+        if region_tz:
+            timezone_hint = region_tz
 
     return {
         "us_evident": us_evident,
         "non_us_explicit": non_us,
         "timezone_hint": timezone_hint,
         "raw": raw,
+        "work_authorized": work_authorized,
+        "needs_sponsorship": needs_sponsorship,
+        "region_raw": region_raw,
     }
