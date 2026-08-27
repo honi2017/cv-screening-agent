@@ -15,34 +15,36 @@ from screen.text import find_section, jaccard, normalize
 
 # --- Placeholders -----------------------------------------------------------
 
-# Each entry is (pattern, requires_field_word). Placeholders are a Tier 1 hard
-# gate, so these are tuned to prefer false negatives: a missed placeholder still
-# reaches the judge, whereas a false hit silently discards a real applicant.
-_PLACEHOLDER_PATTERNS = (
-    # Bracketed label containing an unambiguous template word.
-    (re.compile(r"\[[^\]\n]*\b(?:your|company|position|employer|candidate)\b[^\]\n]*\]", re.I), False),
-    # Bare bracketed field label: Title Case or ALL CAPS only, and it must name a
-    # known form field. "[Job Title]" and "[FULL NAME]" match; "[job queue]",
-    # "[role-based access control]" and "[title]" do not.
-    (re.compile(r"\[\s*(?:[A-Z][a-z]+|[A-Z]{2,})(?:[\s_-]+(?:[A-Z][a-z]+|[A-Z]{2,}))*\s*\]"), True),
-    # "insert ..." only inside an explicit delimiter. Without this, every CV that
-    # mentions a database insert was being eliminated.
-    (re.compile(r"[\[\{<]\s*insert\s+[^\]\}>\n]{2,40}[\]\}>]", re.I), False),
-    (re.compile(r"lorem\s+ipsum", re.I), False),
-    # Unfilled metric placeholders: XX%, X%, NN%.
-    (re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I), False),
-    # Template engine syntax left behind.
-    (re.compile(r"\{\{[^}\n]{1,40}\}\}"), False),
-    (re.compile(r"<[A-Z_]{3,30}>"), False),
+# Placeholders are a Tier 1 hard gate: a false hit silently discards a real
+# applicant, so these patterns are deliberately narrow. Bracketed labels count
+# only when the field noun is the HEAD of the phrase (its last word) and the
+# label is at least two words. That is what separates a form label
+# ("[Company Name]", "[Email Address]") from an NDA-anonymised employer
+# ("[Company A]", "[Employer Redacted]") or a domain object ("[Email]",
+# "[Date]"), all of which are legitimate CV content. Word lists proved
+# hopeless here — three narrowings were each defeated by a realistic phrase.
+_FIELD_HEAD = (
+    r"(?i:name|title|email|phone|address|number|date|degree|major|gpa|location)s?"
 )
 
-# "school", "university", "state", and "city" are deliberately absent: they
-# are components of real institution and place names ("[Ohio State
-# University]", "[Penn State]"), not unambiguous form-field labels. The
-# genuine placeholders that use them ("[School Name]", "[University Name]")
-# are still caught via "name".
-_TEMPLATE_FIELD_WORDS = re.compile(
-    r"\b(?:name|title|email|phone|address|date|degree)\b", re.I
+_PLACEHOLDER_PATTERNS = (
+    # Second person is unambiguous: nobody anonymises an employer as "[Your Company]".
+    re.compile(r"\[\s*your\b[^\]\n]{0,30}\]", re.I),
+    # "insert ..." only inside an explicit delimiter — a bare "insert" is a database verb.
+    re.compile(r"[\[\{<]\s*insert\s+[^\]\}>\n]{2,40}[\]\}>]", re.I),
+    # Field-descriptor label: >=2 Title-Case/ALL-CAPS words ending in a field noun.
+    # The (?i:...) scope makes only the head noun case-insensitive, so "[FULL NAME]"
+    # matches while the surrounding word-shape requirement stays case-sensitive.
+    re.compile(
+        r"\[\s*(?:[A-Z][A-Za-z]*|[A-Z]{2,})(?:[\s_-]+(?:[A-Z][A-Za-z]*|[A-Z]{2,}))*"
+        r"[\s_-]+" + _FIELD_HEAD + r"\s*\]"
+    ),
+    re.compile(r"lorem\s+ipsum", re.I),
+    # Unfilled metric placeholders: XX%, X%, NN%.
+    re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I),
+    # Template engine syntax left behind.
+    re.compile(r"\{\{[^}\n]{1,40}\}\}"),
+    re.compile(r"<[A-Z_]{3,30}>"),
 )
 
 
@@ -50,11 +52,9 @@ def find_placeholders(text: str) -> list[dict[str, Any]]:
     """Find template text the applicant never replaced."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for pattern, requires_field_word in _PLACEHOLDER_PATTERNS:
+    for pattern in _PLACEHOLDER_PATTERNS:
         for m in pattern.finditer(text):
             match = m.group(0).strip()
-            if requires_field_word and not _TEMPLATE_FIELD_WORDS.search(match):
-                continue
             key = match.lower()
             if key in seen:
                 continue
@@ -104,7 +104,6 @@ _POWER_VERBS = frozenset(
 )
 
 _ROUND_PCT_RE = re.compile(r"\b(\d{1,3})\s?%")
-_ANY_METRIC_RE = re.compile(r"\b\d+(?:\.\d+)?\s?%|\b\d[\d,]*\b")
 
 
 def power_verb_density(bullets: list[str]) -> float:
@@ -165,4 +164,4 @@ def template_metadata_signal(
     if minutes_before_submission > float(cfg.gates["metadata_minutes_threshold"]):
         return False
     haystack = f"{meta.get('producer', '')} {meta.get('creator', '')}".lower()
-    return any(p in haystack for p in cfg.gates["metadata_template_producers"])
+    return any(str(p).lower() in haystack for p in cfg.gates["metadata_template_producers"])

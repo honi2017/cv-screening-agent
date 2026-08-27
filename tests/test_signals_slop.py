@@ -40,30 +40,63 @@ def test_find_placeholders_ignores_normal_brackets():
     assert find_placeholders("Published in JMLR [1]. Worked 2019-2023 (Acme).") == []
 
 
-def test_find_placeholders_ignores_real_engineering_phrasing():
-    # These are genuine engineering CV phrases, not unfilled templates. A Tier 1
-    # hit here is a silent, unappealable rejection of a qualified applicant --
-    # this broke an earlier version of these patterns, which matched bare
-    # "insert" (a database verb) and any bracketed phrase containing a word
-    # like "role" or "job" regardless of case. The delimiter requirement on
-    # "insert" (must be wrapped in [], {}, or <>) and the capitalisation +
-    # known-field-word requirement on bare bracketed labels are what keep
-    # these out of scope.
-    # "state", "city", "school", and "university" are deliberately absent from
-    # _TEMPLATE_FIELD_WORDS: they are components of real institution and place
-    # names, not unambiguous form-field labels, so bracketed institution names
-    # must not fire either.
+def test_find_placeholders_ignores_realistic_false_positive_classes():
+    # Every one of these is real phrasing for a senior integration/consulting
+    # engineer, not an unfilled template. A Tier 1 hit here is a silent,
+    # unappealable rejection of a qualified applicant. Three earlier
+    # word-list-based versions of this pattern were each defeated by one of
+    # these classes in turn:
+    #   - "insert" as a bare database verb ("batch insert operations")
+    #   - lowercase generic brackets ("[role-based access control]", "[job queue]")
+    #   - bracketed institution/place names containing a field-ish word
+    #     ("[Ohio State University]", "[Penn State]")
+    #   - NDA-anonymised employers, which put the field noun FIRST, not last
+    #     ("[Company A]", "[Employer Redacted]", "[Candidate Matching]")
+    #   - single-word domain labels, which have no second word at all
+    #     ("[Email]", "[Address]", "[Date]", "[Degree]", "[PII]", "[ETL]")
+    # The current rule -- a bracketed label counts only when it has at least
+    # two words AND the field noun is the HEAD (last word) of the phrase --
+    # is what keeps all of these out of scope: none of them end in a
+    # recognised field noun, and the single-word ones never reach the
+    # mandatory second-word requirement at all.
     must_not_fire = [
-        "Optimised batch insert operations for the ingestion pipeline",
-        "Reduced insert latency from 400ms to 12ms on the orders table",
-        "Migrated bulk insert jobs to COPY for 8x throughput",
-        "Built [role-based access control] across 12 services",
-        "Implemented [job queue] with Redis",
-        "Shipped [Redis] and [Kafka] integrations",
-        "Wrote the [title] parser for citations",
+        # NDA-anonymised employers / candidate-facing product nouns: field
+        # word present but not the head.
+        "Built the integration platform for [Company A] (NDA, name withheld)",
+        "Delivered SSO rollout for [Company Confidential]",
+        "Worked at [Employer Redacted] as a senior engineer",
+        "Built a [Candidate Matching] algorithm for the recruiting platform",
+        "Owned the [Candidate Pipeline] service for the ATS integration",
+        # Single-word domain labels: no second word to pair with the head.
+        "Improved [Email] deliverability by tuning DKIM",
+        "Rebuilt the [Address] validation service",
+        "Migrated the [Date] parsing library to use ISO 8601",
+        "Earned a [Degree] in Computer Science",
+        # Bracketed institution/place names.
         "[Ohio State University]",
         "[Penn State]",
         "BSc, [Ohio State University], 2014",
+        # "insert" as an ordinary database verb, no delimiter.
+        "Optimised batch insert operations for the ingestion pipeline",
+        "Reduced insert latency from 400ms to 12ms on the orders table",
+        "Migrated bulk insert jobs to COPY for 8x throughput",
+        # Lowercase, generic, or citation-style brackets.
+        "Built [role-based access control] across 12 services",
+        "Implemented [job queue] with Redis",
+        "Shipped [Redis] and [Kafka] integrations",
+        "Published in JMLR [1] and NeurIPS [2]",
+        "Wrote the [title] parser for citations",
+        # Proper nouns/phrases that happen to contain a field word, but not
+        # as the head.
+        "[Grant Date Analytics]",
+        "[Phone Home]",
+        "Led the [Client Onboarding] workstream",
+        "Owned [Data Model] design for 3 clients",
+        "Integrated [Salesforce] and [DealCloud]",
+        "Reported to [VP Engineering]",
+        "Handled [PII] redaction across the pipeline",
+        "Used [ETL] tooling for the migration",
+        "Client [A] and Client [B] integrations",
     ]
     for text in must_not_fire:
         assert find_placeholders(text) == [], text
@@ -74,17 +107,25 @@ def test_find_placeholders_catches_real_placeholders():
         "[Company Name]",
         "[Position Title]",
         "[Your Email]",
+        "[Your Name]",
         "[Job Title]",
         "[FULL NAME]",
+        "[YOUR NAME]",
+        "[Employer Name]",
+        "[School Name]",
+        "[University Name]",
+        "[Email Address]",
+        "[Phone Number]",
+        "[Contact Number]",
+        "[Candidate Name]",
+        "[Company_Name]",
         "[Insert metric here]",
         "{INSERT COMPANY NAME}",
         "<CANDIDATE_NAME>",
         "{{name}}",
-        "Lorem ipsum",
+        "Lorem ipsum dolor",
         "XX%",
-        "[School Name]",
-        "[University Name]",
-        "[Degree]",
+        "[Your Role]",
     ]
     for text in must_fire:
         assert find_placeholders(text) != [], text
