@@ -15,36 +15,39 @@ from screen.text import find_section, jaccard, normalize
 
 # --- Placeholders -----------------------------------------------------------
 
-# Placeholders are a Tier 1 hard gate: a false hit silently discards a real
-# applicant, so these patterns are deliberately narrow. Bracketed labels count
-# only when the field noun is the HEAD of the phrase (its last word) and the
-# label is at least two words. That is what separates a form label
-# ("[Company Name]", "[Email Address]") from an NDA-anonymised employer
-# ("[Company A]", "[Employer Redacted]") or a domain object ("[Email]",
-# "[Date]"), all of which are legitimate CV content. Word lists proved
-# hopeless here — three narrowings were each defeated by a realistic phrase.
-_FIELD_HEAD = (
-    r"(?i:name|title|email|phone|address|number|date|degree|major|gpa|location)s?"
+# Placeholders are a Tier 1 hard gate: a hit silently and unappealably rejects a
+# candidate, so this detector only fires on markers that CANNOT be legitimate CV
+# content. Deliberately absent: two-word bracketed field labels like
+# "[Company Name]". They are grammatically identical to legitimate domain objects
+# an engineer would cite ("[Tracking Number]", "[Case Number]", "[IP Address]"),
+# so telling them apart needs the surrounding sentence — a judgement call that
+# belongs to the RedFlag judge pass, not here. Four successive regex designs were
+# each defeated by a realistic phrase before this boundary was drawn; do not
+# reintroduce a generic bracket-label pattern without reading that history.
+
+# ALL_CAPS token, but only when it names an applicant form field: an engineer
+# legitimately cites env vars like <DATABASE_URL> and <API_KEY>. Named
+# separately (rather than inlined below) so find_placeholders can identify it
+# by identity and apply the extra _SELF_FIELD_TOKEN check only to this pattern.
+_ALL_CAPS_TOKEN_RE = re.compile(r"<[A-Z][A-Z_]{2,29}>")
+
+# Applied only to the ALL_CAPS-token pattern above.
+_SELF_FIELD_TOKEN = re.compile(
+    r"(?:CANDIDATE|APPLICANT|COMPANY|EMPLOYER|POSITION|JOB|FULL|YOUR|SCHOOL|UNIVERSITY)"
+    r"|(?:NAME|TITLE|EMAIL|PHONE)$",
+    re.I,
 )
 
 _PLACEHOLDER_PATTERNS = (
-    # Second person is unambiguous: nobody anonymises an employer as "[Your Company]".
+    # Second person: nobody names a domain object "[Your Company]".
     re.compile(r"\[\s*your\b[^\]\n]{0,30}\]", re.I),
-    # "insert ..." only inside an explicit delimiter — a bare "insert" is a database verb.
+    # Imperative, and only inside an explicit delimiter — a bare "insert" is a
+    # database verb ("batch insert operations").
     re.compile(r"[\[\{<]\s*insert\s+[^\]\}>\n]{2,40}[\]\}>]", re.I),
-    # Field-descriptor label: >=2 Title-Case/ALL-CAPS words ending in a field noun.
-    # The (?i:...) scope makes only the head noun case-insensitive, so "[FULL NAME]"
-    # matches while the surrounding word-shape requirement stays case-sensitive.
-    re.compile(
-        r"\[\s*(?:[A-Z][A-Za-z]*|[A-Z]{2,})(?:[\s_-]+(?:[A-Z][A-Za-z]*|[A-Z]{2,}))*"
-        r"[\s_-]+" + _FIELD_HEAD + r"\s*\]"
-    ),
     re.compile(r"lorem\s+ipsum", re.I),
-    # Unfilled metric placeholders: XX%, X%, NN%.
     re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I),
-    # Template engine syntax left behind.
     re.compile(r"\{\{[^}\n]{1,40}\}\}"),
-    re.compile(r"<[A-Z_]{3,30}>"),
+    _ALL_CAPS_TOKEN_RE,
 )
 
 
@@ -55,6 +58,8 @@ def find_placeholders(text: str) -> list[dict[str, Any]]:
     for pattern in _PLACEHOLDER_PATTERNS:
         for m in pattern.finditer(text):
             match = m.group(0).strip()
+            if pattern is _ALL_CAPS_TOKEN_RE and not _SELF_FIELD_TOKEN.search(match.strip("<>")):
+                continue
             key = match.lower()
             if key in seen:
                 continue

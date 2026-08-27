@@ -14,11 +14,19 @@ CFG = load_role(Path(__file__).resolve().parents[1] / "roles" / "fde")
 
 
 def test_find_placeholders_catches_bracketed_tokens():
+    # UPDATED (see task-4-report.md, Fix 4): [Company Name] and [Position
+    # Title] are no longer caught. A two-word bracketed field label like
+    # these is grammatically identical to a legitimate domain object an
+    # engineer would cite ("[Tracking Number]", "[IP Address]"), so
+    # distinguishing them needs the surrounding sentence and is deliberately
+    # left to the judge -- see
+    # test_find_placeholders_documents_deliberate_false_negatives. Only
+    # "[Your Email]" is unambiguous (second person) and still fires here.
     text = "Excited to join [Company Name] as a [Position Title]. Contact [Your Email]."
     kinds = [p["match"] for p in find_placeholders(text)]
-    assert "[Company Name]" in kinds
-    assert "[Position Title]" in kinds
     assert "[Your Email]" in kinds
+    assert "[Company Name]" not in kinds
+    assert "[Position Title]" not in kinds
 
 
 def test_find_placeholders_catches_lorem_and_xx_metrics():
@@ -43,9 +51,8 @@ def test_find_placeholders_ignores_normal_brackets():
 def test_find_placeholders_ignores_realistic_false_positive_classes():
     # Every one of these is real phrasing for a senior integration/consulting
     # engineer, not an unfilled template. A Tier 1 hit here is a silent,
-    # unappealable rejection of a qualified applicant. Three earlier
-    # word-list-based versions of this pattern were each defeated by one of
-    # these classes in turn:
+    # unappealable rejection of a qualified applicant. Four earlier designs
+    # of this detector were each defeated by one of these classes in turn:
     #   - "insert" as a bare database verb ("batch insert operations")
     #   - lowercase generic brackets ("[role-based access control]", "[job queue]")
     #   - bracketed institution/place names containing a field-ish word
@@ -54,11 +61,15 @@ def test_find_placeholders_ignores_realistic_false_positive_classes():
     #     ("[Company A]", "[Employer Redacted]", "[Candidate Matching]")
     #   - single-word domain labels, which have no second word at all
     #     ("[Email]", "[Address]", "[Date]", "[Degree]", "[PII]", "[ETL]")
-    # The current rule -- a bracketed label counts only when it has at least
-    # two words AND the field noun is the HEAD (last word) of the phrase --
-    # is what keeps all of these out of scope: none of them end in a
-    # recognised field noun, and the single-word ones never reach the
-    # mandatory second-word requirement at all.
+    #   - two-word bracketed DOMAIN objects that are grammatically identical
+    #     to a template label ("[Tracking Number]", "[IP Address]") -- this
+    #     is why the detector no longer has ANY generic bracket-label
+    #     pattern; see test_find_placeholders_documents_deliberate_false_negatives
+    #   - ALL_CAPS env-var tokens in angle brackets ("<DATABASE_URL>", "<API_KEY>")
+    # The current design only fires on markers that CANNOT be legitimate CV
+    # content: "[Your ...]" (second person), "insert" inside an explicit
+    # delimiter, lorem ipsum, XX%/NN%, {{mustache}}, and ALL_CAPS angle-bracket
+    # tokens that name an applicant field specifically (not just any env var).
     must_not_fire = [
         # NDA-anonymised employers / candidate-facing product nouns: field
         # word present but not the head.
@@ -97,38 +108,71 @@ def test_find_placeholders_ignores_realistic_false_positive_classes():
         "Handled [PII] redaction across the pipeline",
         "Used [ETL] tooling for the migration",
         "Client [A] and Client [B] integrations",
+        # Two-word bracketed domain/field references -- structurally
+        # identical to a template label but naming a real system field.
+        "Built [Tracking Number] validation for the shipping service",
+        "Wrote the [Serial Number] parser for warranty claims",
+        "Owned [Case Number] routing for the support platform",
+        "Migrated [Account Number] masking across the platform",
+        "Built [Purchase Order Number] validation for procurement",
+        "Owned [Policy Number] lookups for the claims platform",
+        "Normalised [IP Address] geolocation lookups",
+        "Tracked the [Release Date] field",
+        # ALL_CAPS angle-bracket tokens that are ordinary env vars, not
+        # applicant form fields.
+        "Documented <DATABASE_URL> and <API_KEY> in the onboarding runbook",
+        "Configured <REDIS_HOST> for staging",
     ]
     for text in must_not_fire:
         assert find_placeholders(text) == [], text
 
 
 def test_find_placeholders_catches_real_placeholders():
+    # Only markers that cannot be legitimate CV content: second-person
+    # brackets, delimited "insert" instructions, mustache tags, lorem ipsum,
+    # unfilled XX%/NN% metrics, and ALL_CAPS angle-bracket tokens that
+    # explicitly name an applicant field (not just any env var).
     must_fire = [
-        "[Company Name]",
-        "[Position Title]",
-        "[Your Email]",
         "[Your Name]",
-        "[Job Title]",
-        "[FULL NAME]",
+        "[Your Email]",
+        "[Your Role]",
         "[YOUR NAME]",
-        "[Employer Name]",
-        "[School Name]",
-        "[University Name]",
-        "[Email Address]",
-        "[Phone Number]",
-        "[Contact Number]",
-        "[Candidate Name]",
-        "[Company_Name]",
+        "[your company]",
         "[Insert metric here]",
         "{INSERT COMPANY NAME}",
         "<CANDIDATE_NAME>",
+        "<COMPANY_NAME>",
+        "<FULL_NAME>",
         "{{name}}",
+        "{{company}}",
         "Lorem ipsum dolor",
-        "XX%",
-        "[Your Role]",
+        "Improved throughput by XX%",
+        "Reduced cost by NN%",
     ]
     for text in must_fire:
         assert find_placeholders(text) != [], text
+
+
+def test_find_placeholders_documents_deliberate_false_negatives():
+    # These ARE genuine, unfilled template labels -- but they are also
+    # grammatically identical to legitimate domain objects an engineer would
+    # cite in a real bullet ("[Tracking Number]", "[Case Number]", "[IP
+    # Address]"). Telling a template label apart from a domain object needs
+    # the surrounding sentence, which is a judgement call left to the RedFlag
+    # judge pass, not this mechanical detector. Four successive regex designs
+    # were each defeated by a realistic phrase before this boundary was
+    # deliberately drawn here (see task-4-report.md, Fix 4) -- a failure in
+    # this test is not a bug to fix by re-adding a generic bracket-label
+    # pattern.
+    must_not_fire = [
+        "[Company Name]",
+        "[Position Title]",
+        "[Phone Number]",
+        "[Email Address]",
+        "[Job Title]",
+    ]
+    for text in must_not_fire:
+        assert find_placeholders(text) == [], text
 
 
 def test_intra_cv_duplicates_flags_near_identical_bullets():
