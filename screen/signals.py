@@ -382,7 +382,7 @@ _MT_STATES = frozenset("MT WY CO NM UT ID AZ".split())
 _PT_STATES = frozenset("WA OR CA NV AK HI".split())
 
 _US_HINT_RE = re.compile(
-    r"\b([A-Z]{2})\b(?:\s+\d{5})?|\b(United States|USA|U\.S\.A?\.)\b"
+    r",\s*([A-Z]{2})\b(?:\s+\d{5})?|\b(United States|USA|U\.S\.A?\.)\b"
 )
 
 _NON_US_COUNTRIES = (
@@ -482,9 +482,17 @@ def find_degree(markdown: str) -> dict[str, Any]:
 
 def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str, Any]:
     raw = _profile_value(profile_data or [], "location", "city", "address")
-    haystack = raw or "\n".join((markdown or "").splitlines()[:12])
+    lines = [l for l in (markdown or "").splitlines() if l.strip()]
+    # Residence evidence only: the ATS location field, else the contact header.
+    # A country named in the summary or body describes WORK, not residence — and
+    # this role's JD explicitly rewards offshore collaboration, so scanning prose
+    # eliminated exactly the candidates the JD most wants. Verified: a US-based
+    # candidate whose summary reads "clients across Vietnam and Singapore" was
+    # being marked non_us_explicit and eliminated by gate G5.
+    residence_scope = raw if raw else "\n".join(lines[:3])
+    wide_scope = raw if raw else "\n".join(lines[:12])
 
-    lowered = haystack.lower()
+    lowered = residence_scope.lower()
     non_us = any(c in lowered for c in _NON_US_COUNTRIES)
     if non_us and _WORK_AUTH_RE.search(markdown or ""):
         # Says they are abroad but also authorised or relocating: not a gate.
@@ -492,7 +500,7 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
 
     timezone_hint = "unknown"
     us_evident = False
-    for m in _US_HINT_RE.finditer(haystack):
+    for m in _US_HINT_RE.finditer(wide_scope):
         code = (m.group(1) or "").upper()
         if code in _ET_STATES:
             timezone_hint, us_evident = "ET", True
