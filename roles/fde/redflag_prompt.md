@@ -17,9 +17,32 @@ below.
 - **Wrong company or role.** The CV or summary names a different employer or
   position than the one being applied for (Forward Deployed Engineer at
   Anduin). Example: "excited to join Palantir as a Solutions Architect".
-- **Summary contradicts the body.** The summary claims years of experience, a
-  domain, or a seniority the experience section does not support. A claim of
-  "10 years in fintech" over three years of unrelated work is Tier 1.
+- **Summary contradicts the body — material, checkable contradiction only.**
+  This is Tier 1 only when the summary asserts something the body positively
+  *refutes*, not merely something it fails to fully back up. Qualifying
+  claims:
+  - a **years-of-experience or seniority claim** the dates or roles
+    contradict — the canonical example: "10 years in fintech" over three
+    years of unrelated work.
+  - a **named employer, title, credential, or qualification** that
+    contradicts what the body states.
+  - a **quantified claim** (a headcount, a client count, a revenue figure)
+    the body disproves.
+
+  **Do not flag** a summary that names a domain, industry, or technology the
+  body evidences only partially or adjacently — a summary listing three
+  domains where the body clearly supports two is normal framing, not a
+  contradiction, even if the third is thinner than the rest. Also **do not
+  flag** a summary that is simply broader or more confident in tone than the
+  body's bullets; that is ordinary CV writing, not fabrication.
+
+  The test to apply: does the body *refute* the claim, or does it merely
+  *fail to fully evidence* it? Only refutation is Tier 1. A claim the body
+  does not fully support is at most Tier 2 (`generic_summary` already covers
+  unsupported summary language) — and when in doubt, do not flag it here at
+  all: this signal has no appeal once it fires, so a false positive is a
+  guaranteed false elimination of a good engineer, and uncertainty must
+  resolve toward not flagging.
 - **Leftover template placeholder where the applicant's own details belong**
   — the contact header, the summary, or the education block. This covers
   both bracketed field labels (`[Company Name]`, `[Position Title]`, `[Phone

@@ -81,6 +81,28 @@ def test_redflag_prompt_tells_judge_not_to_invent_kind_values():
     assert "kind" in text
 
 
+def test_redflag_prompt_requires_material_or_refuted_claim_for_summary_contradicts_body():
+    text = CFG.redflag_prompt().lower()
+    assert "summary contradicts the body" in text
+    assert "years-of-experience or seniority claim" in text
+    assert "named employer, title, credential, or qualification" in text
+    assert "quantified claim" in text
+    assert "refutes" in text or "refute" in text
+
+
+def test_redflag_prompt_excludes_partial_domain_evidence_from_summary_contradicts_body():
+    text = CFG.redflag_prompt().lower()
+    assert "do not flag" in text
+    assert "domain, industry, or technology" in text
+    assert "normal framing, not a" in text
+
+
+def test_redflag_prompt_says_summary_contradicts_body_is_unappealable_and_favors_not_flagging():
+    text = CFG.redflag_prompt().lower()
+    assert "no appeal" in text
+    assert "resolve toward not flagging" in text
+
+
 def test_fit_prompt_has_placeholders_including_redflag_result():
     text = CFG.fit_prompt()
     for token in ("{{REDACTED_CV}}", "{{PRECHECKS}}", "{{REDFLAG_RESULT}}"):
