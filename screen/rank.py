@@ -254,3 +254,178 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
         timezone_hint=str(location.get("timezone_hint") or "unknown"),
         quote_warnings=list(verdict.get("quote_warnings") or []),
     )
+
+# --- Ranking and the cap ----------------------------------------------------
+
+import math  # noqa: E402  (grouped with the ranking section)
+
+from screen.ledger import LedgerEntry  # noqa: E402
+
+
+@dataclass(frozen=True)
+class CutResult:
+    cap: int
+    pool_size: int
+    accepted: list[int]
+    waitlist: list[int]
+    gated: list[int]
+    needs_review: list[int]
+    newly_accepted: list[int]
+    newly_gated: list[int]
+    no_slot: list[int]
+    calibration_window: list[int]
+    quality_floor: float | None
+
+
+def _sort_key(assessment: Assessment, cfg: RoleConfig) -> tuple:
+    """Score first; the JD's East-Coast/Midwest preference breaks ties."""
+    tz_rank = 0 if assessment.timezone_hint in cfg.tiebreak_timezones else 1
+    return (-assessment.final, tz_rank, assessment.candidate_id)
+
+
+def rank_and_cut(
+    assessments: dict[int, Assessment],
+    ledger: dict[int, LedgerEntry],
+    cfg: RoleConfig,
+    run_id: str,
+    needs_review: dict[int, str],
+    withdrawn: set[int],
+    calibration_order: list[int] | None = None,
+) -> CutResult:
+    """Rank, apply the cap, and update the ledger in place.
+
+    Pool counts everyone who applied except withdrawals — gated and
+    needs-review candidates included — so the 20 % is honest.
+    """
+    pool_ids = (set(assessments) | set(needs_review)) - withdrawn
+    pool_size = len(pool_ids)
+    cap = math.floor(cfg.cap_fraction * pool_size)
+
+    gated: list[int] = []
+    rankable: list[Assessment] = []
+    for cid, assessment in assessments.items():
+        if cid in withdrawn or cid in needs_review:
+            continue
+        previously_accepted = (
+            cid in ledger and ledger[cid].status == "accepted"
+        )
+        if assessment.gate and not previously_accepted:
+            gated.append(cid)
+        else:
+            rankable.append(assessment)
+
+    rankable.sort(key=lambda a: _sort_key(a, cfg))
+    order = [a.candidate_id for a in rankable]
+
+    # The calibration window straddles the cut; the main agent may reorder
+    # inside it but cannot pull anyone in from outside or widen the cut.
+    # Window is the 2w+1 ranks centred on the cut: 1-indexed ranks
+    # (cap - w) .. (cap + w), i.e. 0-indexed slice [cap-w-1 : cap+w].
+    w = cfg.calibration_window
+    lo, hi = max(0, cap - w - 1), min(len(order), cap + w)
+    window = order[lo:hi]
+
+    if calibration_order:
+        allowed = set(window)
+        proposed = [cid for cid in calibration_order if cid in allowed]
+        remainder = [cid for cid in window if cid not in proposed]
+        order = order[:lo] + proposed + remainder + order[hi:]
+
+    already_accepted = [
+        cid for cid in order if cid in ledger and ledger[cid].status == "accepted"
+    ]
+    floor: float | None = None
+    if already_accepted:
+        floor = round(
+            min(ledger[cid].final for cid in already_accepted) - cfg.quality_floor_delta, 2
+        )
+
+    accepted = list(already_accepted)
+    newly_accepted: list[int] = []
+    no_slot: list[int] = []
+
+    for cid in order:
+        if cid in accepted:
+            continue
+        assessment = assessments[cid]
+        # The floor guards against a slot opened purely by pool growth being
+        # filled by a weak brand-new arrival (design doc §6.2 rule 4). A
+        # candidate the ledger already had on the waitlist from a prior run
+        # was already ranked and vetted; the sticky-ledger promise extends
+        # sensibly to not subjecting them to a stricter bar just because the
+        # cap grew -- so an existing ledger entry (any non-accepted status;
+        # already-accepted candidates are handled separately above) exempts
+        # them from the floor.
+        clears_floor = floor is None or assessment.final >= floor or cid in ledger
+        if len(accepted) < cap and clears_floor:
+            accepted.append(cid)
+            newly_accepted.append(cid)
+        elif clears_floor and len(accepted) >= cap:
+            no_slot.append(cid)
+
+    accepted_set = set(accepted)
+    waitlist = [cid for cid in order if cid not in accepted_set]
+
+    # --- Ledger update ------------------------------------------------------
+    newly_gated: list[int] = []
+
+    def status_for(cid: int) -> str:
+        if cid in withdrawn:
+            return "withdrawn"
+        if cid in needs_review:
+            return "needs_review"
+        if cid in accepted_set:
+            return "accepted"
+        if cid in gated:
+            return "gated"
+        return "waitlist"
+
+    for cid in sorted(pool_ids | withdrawn):
+        assessment = assessments.get(cid)
+        new_status = status_for(cid)
+        existing = ledger.get(cid)
+
+        if existing is None:
+            ledger[cid] = LedgerEntry(
+                candidate_id=cid,
+                status=new_status,
+                gate=assessment.gate if assessment else None,
+                final=assessment.final if assessment else 0.0,
+                first_seen_run=run_id,
+                status_changed_run=run_id,
+                pdf_sha256="",
+                trakstar_updated_date="",
+            )
+            if new_status == "gated":
+                newly_gated.append(cid)
+            continue
+
+        # Record the gate even on an accepted candidate: the report surfaces it
+        # as a flag, and a human decides whether to override.
+        if assessment is not None:
+            existing.gate = assessment.gate
+            if existing.status != "accepted":
+                existing.final = assessment.final
+
+        if existing.status == "accepted":
+            continue  # sticky
+
+        if existing.status != new_status:
+            existing.status = new_status
+            existing.status_changed_run = run_id
+            if new_status == "gated":
+                newly_gated.append(cid)
+
+    return CutResult(
+        cap=cap,
+        pool_size=pool_size,
+        accepted=sorted(accepted),
+        waitlist=waitlist,
+        gated=sorted(gated),
+        needs_review=sorted(needs_review),
+        newly_accepted=sorted(newly_accepted),
+        newly_gated=sorted(newly_gated),
+        no_slot=sorted(no_slot),
+        calibration_window=window,
+        quality_floor=floor,
+    )
