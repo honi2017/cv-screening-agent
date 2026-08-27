@@ -340,3 +340,181 @@ def has_gap_over(
         if next_start - prev_end - 1 >= months:
             return True
     return False
+
+
+# --- LinkedIn, degree, location --------------------------------------------
+
+_LINKEDIN_RE = re.compile(
+    r"(?:https?://)?(?:[a-z]{2,3}\.)?linkedin\.com/(?:in|pub)/([A-Za-z0-9\-_%]+)", re.I
+)
+
+_DEGREE_PATTERNS = (
+    (re.compile(r"\b(?:ph\.?d|doctorate)\b", re.I), "PhD"),
+    # m\.?s\.? (not m\.?s\.): the sole other bare-letter alternative, BA below,
+    # already makes its trailing period optional (b\.?a\.?). Leaving this one's
+    # period mandatory meant a bare "MS" -- at least as common on real resumes
+    # as "MSc" -- silently failed to register as a degree at all, undercounting
+    # a real degree holder. See BSc below for the identical fix.
+    (re.compile(r"\b(?:m\.?sc|msc|m\.?s\.?|master(?:'s|s)?(?:\s+of\s+\w+)?)\b", re.I), "MSc"),
+    (re.compile(r"\bm\.?eng\b", re.I), "MEng"),
+    (re.compile(r"\bmba\b", re.I), "MBA"),
+    # b\.?s\.? (not b\.?s\.): same fix as MSc above -- bare "BS" (no trailing
+    # period) is at least as common as "BSc" on US resumes and was previously
+    # invisible to this detector, wrongly zeroing out `present` (and the -5pt
+    # penalty is *not* an elimination, so the safer failure mode is to err
+    # toward crediting a plausible bare "BS"/"MS" than to keep missing it).
+    (re.compile(r"\b(?:b\.?sc|bsc|b\.?s\.?|bachelor(?:'s|s)?(?:\s+of\s+\w+)?)\b", re.I), "BSc"),
+    (re.compile(r"\bb\.?eng\b", re.I), "BEng"),
+    (re.compile(r"\bb\.?tech\b", re.I), "BTech"),
+    (re.compile(r"\bb\.?a\.?\b", re.I), "BA"),
+)
+
+_FIELD_RE = re.compile(
+    r"\b(?:in|of)\s+([A-Z][A-Za-z&\s]{2,40}?)(?:,|\.|\n|$)|"
+    r"(computer science|software engineering|information systems|computer engineering|"
+    r"electrical engineering|mathematics|physics|information technology|data science)",
+    re.I,
+)
+
+_ET_STATES = frozenset("ME NH VT MA RI CT NY NJ PA DE MD DC VA WV NC SC GA FL OH MI IN".split())
+_CT_STATES = frozenset("IL WI MN IA MO AR LA MS AL TN KY KS NE SD ND OK TX".split())
+_MT_STATES = frozenset("MT WY CO NM UT ID AZ".split())
+_PT_STATES = frozenset("WA OR CA NV AK HI".split())
+
+_US_HINT_RE = re.compile(
+    r"\b([A-Z]{2})\b(?:\s+\d{5})?|\b(United States|USA|U\.S\.A?\.)\b"
+)
+
+_NON_US_COUNTRIES = (
+    "vietnam", "viet nam", "india", "canada", "united kingdom", "england", "germany",
+    "france", "singapore", "australia", "brazil", "mexico", "philippines", "poland",
+    "ukraine", "nigeria", "pakistan", "bangladesh", "china", "japan", "korea",
+    "netherlands", "spain", "italy", "ireland", "sweden", "norway", "denmark",
+)
+
+_WORK_AUTH_RE = re.compile(
+    r"\b(?:us|u\.s\.)\s*(?:work\s*)?(?:authoriz|authoris|citizen|permanent resident|green card)"
+    r"|\bauthorized to work in the (?:us|united states)\b"
+    r"|\brelocat(?:e|ing|ion)\b",
+    re.I,
+)
+
+
+def _profile_value(profile_data: list[dict[str, Any]], *needles: str) -> str | None:
+    for item in profile_data or []:
+        name = str(item.get("name", "")).lower()
+        if any(n in name for n in needles):
+            value = str(item.get("value", "")).strip()
+            if value:
+                return value
+    return None
+
+
+def _slug_matches_name(slug: str, full_name: str) -> bool | None:
+    """True/False when the slug carries name-like tokens, None when opaque."""
+    slug_lower = slug.lower()
+    slug_tokens = {t for t in re.split(r"[-_%\d]+", slug_lower) if len(t) > 2}
+    if not slug_tokens:
+        return None
+    name_token_list = [t for t in normalize(full_name).split() if len(t) > 2]
+    name_tokens = set(name_token_list)
+    if not name_tokens:
+        return None
+    if slug_tokens & name_tokens:
+        return True
+    # Vanity slugs very commonly concatenate the name with no separator at all
+    # ("alexmorgan", "morganalex" for "Alex Morgan") -- the split above only
+    # breaks on "-", "_", "%", and digits, so a bare concatenation never
+    # tokenizes and would otherwise fall through to the mismatch branch below
+    # and penalise a legitimate profile. Require an EXACT match of the whole
+    # (digit-stripped) slug against the full name concatenated forwards or
+    # backwards, rather than a substring check, so this can't be tricked into
+    # matching an unrelated slug that merely contains a name-like fragment.
+    slug_clean = re.sub(r"[-_%\d]+", "", slug_lower)
+    if slug_clean and slug_clean in ("".join(name_token_list), "".join(reversed(name_token_list))):
+        return True
+    # Slug has real words but none of them are the candidate's name.
+    if any(len(t) > 3 for t in slug_tokens):
+        return False
+    return None
+
+
+def find_linkedin(
+    markdown: str, profile_data: list[dict[str, Any]], full_name: str
+) -> dict[str, Any]:
+    url = _profile_value(profile_data or [], "linkedin")
+    source = "trakstar" if url else "none"
+
+    if not url:
+        m = _LINKEDIN_RE.search(markdown or "")
+        if m:
+            url, source = m.group(0), "cv"
+
+    if not url:
+        return {"present": False, "source": "none", "url": None, "name_matches": None}
+
+    m = _LINKEDIN_RE.search(url)
+    slug = m.group(1) if m else ""
+    return {
+        "present": True,
+        "source": source,
+        "url": url,
+        "name_matches": _slug_matches_name(slug, full_name),
+    }
+
+
+def find_degree(markdown: str) -> dict[str, Any]:
+    body = find_section(markdown, ["education", "academic"]) or markdown or ""
+    level = None
+    for pattern, label in _DEGREE_PATTERNS:
+        if pattern.search(body):
+            level = label
+            break
+    if level is None:
+        return {"present": False, "level": None, "field": None}
+
+    field = None
+    fm = _FIELD_RE.search(body)
+    if fm:
+        field = (fm.group(1) or fm.group(2) or "").strip() or None
+    return {"present": True, "level": level, "field": field}
+
+
+def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str, Any]:
+    raw = _profile_value(profile_data or [], "location", "city", "address")
+    haystack = raw or "\n".join((markdown or "").splitlines()[:12])
+
+    lowered = haystack.lower()
+    non_us = any(c in lowered for c in _NON_US_COUNTRIES)
+    if non_us and _WORK_AUTH_RE.search(markdown or ""):
+        # Says they are abroad but also authorised or relocating: not a gate.
+        non_us = False
+
+    timezone_hint = "unknown"
+    us_evident = False
+    for m in _US_HINT_RE.finditer(haystack):
+        code = (m.group(1) or "").upper()
+        if code in _ET_STATES:
+            timezone_hint, us_evident = "ET", True
+            break
+        if code in _CT_STATES:
+            timezone_hint, us_evident = "CT", True
+            break
+        if code in _MT_STATES:
+            timezone_hint, us_evident = "MT", True
+            break
+        if code in _PT_STATES:
+            timezone_hint, us_evident = "PT", True
+            break
+        if m.group(2):
+            us_evident = True
+
+    if us_evident:
+        non_us = False
+
+    return {
+        "us_evident": us_evident,
+        "non_us_explicit": non_us,
+        "timezone_hint": timezone_hint,
+        "raw": raw,
+    }
