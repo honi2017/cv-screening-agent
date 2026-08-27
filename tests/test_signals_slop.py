@@ -40,6 +40,46 @@ def test_find_placeholders_ignores_normal_brackets():
     assert find_placeholders("Published in JMLR [1]. Worked 2019-2023 (Acme).") == []
 
 
+def test_find_placeholders_ignores_real_engineering_phrasing():
+    # These are genuine engineering CV phrases, not unfilled templates. A Tier 1
+    # hit here is a silent, unappealable rejection of a qualified applicant --
+    # this broke an earlier version of these patterns, which matched bare
+    # "insert" (a database verb) and any bracketed phrase containing a word
+    # like "role" or "job" regardless of case. The delimiter requirement on
+    # "insert" (must be wrapped in [], {}, or <>) and the capitalisation +
+    # known-field-word requirement on bare bracketed labels are what keep
+    # these out of scope.
+    must_not_fire = [
+        "Optimised batch insert operations for the ingestion pipeline",
+        "Reduced insert latency from 400ms to 12ms on the orders table",
+        "Migrated bulk insert jobs to COPY for 8x throughput",
+        "Built [role-based access control] across 12 services",
+        "Implemented [job queue] with Redis",
+        "Shipped [Redis] and [Kafka] integrations",
+        "Wrote the [title] parser for citations",
+    ]
+    for text in must_not_fire:
+        assert find_placeholders(text) == [], text
+
+
+def test_find_placeholders_catches_real_placeholders():
+    must_fire = [
+        "[Company Name]",
+        "[Position Title]",
+        "[Your Email]",
+        "[Job Title]",
+        "[FULL NAME]",
+        "[Insert metric here]",
+        "{INSERT COMPANY NAME}",
+        "<CANDIDATE_NAME>",
+        "{{name}}",
+        "Lorem ipsum",
+        "XX%",
+    ]
+    for text in must_fire:
+        assert find_placeholders(text) != [], text
+
+
 def test_intra_cv_duplicates_flags_near_identical_bullets():
     bullets = [
         "Spearheaded cross-functional initiatives resulting in 40% efficiency gains",

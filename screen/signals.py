@@ -15,17 +15,29 @@ from screen.text import find_section, jaccard, normalize
 
 # --- Placeholders -----------------------------------------------------------
 
+# Each entry is (pattern, requires_field_word). Placeholders are a Tier 1 hard
+# gate, so these are tuned to prefer false negatives: a missed placeholder still
+# reaches the judge, whereas a false hit silently discards a real applicant.
 _PLACEHOLDER_PATTERNS = (
-    # Bracketed template fields: [Your Name], [Company Name], [Position Title].
-    re.compile(r"\[[^\]\n]*\b(?:your|company|position|title|name|email|phone|employer|role|job)\b[^\]\n]*\]", re.I),
-    # Explicit insert instructions, with or without brackets.
-    re.compile(r"\[?\s*insert\s+[^\]\n.]{2,40}\s*\]?", re.I),
-    re.compile(r"lorem\s+ipsum", re.I),
+    # Bracketed label containing an unambiguous template word.
+    (re.compile(r"\[[^\]\n]*\b(?:your|company|position|employer|candidate)\b[^\]\n]*\]", re.I), False),
+    # Bare bracketed field label: Title Case or ALL CAPS only, and it must name a
+    # known form field. "[Job Title]" and "[FULL NAME]" match; "[job queue]",
+    # "[role-based access control]" and "[title]" do not.
+    (re.compile(r"\[\s*(?:[A-Z][a-z]+|[A-Z]{2,})(?:[\s_-]+(?:[A-Z][a-z]+|[A-Z]{2,}))*\s*\]"), True),
+    # "insert ..." only inside an explicit delimiter. Without this, every CV that
+    # mentions a database insert was being eliminated.
+    (re.compile(r"[\[\{<]\s*insert\s+[^\]\}>\n]{2,40}[\]\}>]", re.I), False),
+    (re.compile(r"lorem\s+ipsum", re.I), False),
     # Unfilled metric placeholders: XX%, X%, NN%.
-    re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I),
+    (re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I), False),
     # Template engine syntax left behind.
-    re.compile(r"\{\{[^}\n]{1,40}\}\}"),
-    re.compile(r"<[A-Z_]{3,30}>"),
+    (re.compile(r"\{\{[^}\n]{1,40}\}\}"), False),
+    (re.compile(r"<[A-Z_]{3,30}>"), False),
+)
+
+_TEMPLATE_FIELD_WORDS = re.compile(
+    r"\b(?:name|title|email|phone|address|date|city|state|degree|school|university)\b", re.I
 )
 
 
@@ -33,9 +45,11 @@ def find_placeholders(text: str) -> list[dict[str, Any]]:
     """Find template text the applicant never replaced."""
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
-    for pattern in _PLACEHOLDER_PATTERNS:
+    for pattern, requires_field_word in _PLACEHOLDER_PATTERNS:
         for m in pattern.finditer(text):
             match = m.group(0).strip()
+            if requires_field_word and not _TEMPLATE_FIELD_WORDS.search(match):
+                continue
             key = match.lower()
             if key in seen:
                 continue
