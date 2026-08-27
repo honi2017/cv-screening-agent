@@ -49,6 +49,10 @@ def test_find_placeholders_ignores_real_engineering_phrasing():
     # "insert" (must be wrapped in [], {}, or <>) and the capitalisation +
     # known-field-word requirement on bare bracketed labels are what keep
     # these out of scope.
+    # "state", "city", "school", and "university" are deliberately absent from
+    # _TEMPLATE_FIELD_WORDS: they are components of real institution and place
+    # names, not unambiguous form-field labels, so bracketed institution names
+    # must not fire either.
     must_not_fire = [
         "Optimised batch insert operations for the ingestion pipeline",
         "Reduced insert latency from 400ms to 12ms on the orders table",
@@ -57,6 +61,9 @@ def test_find_placeholders_ignores_real_engineering_phrasing():
         "Implemented [job queue] with Redis",
         "Shipped [Redis] and [Kafka] integrations",
         "Wrote the [title] parser for citations",
+        "[Ohio State University]",
+        "[Penn State]",
+        "BSc, [Ohio State University], 2014",
     ]
     for text in must_not_fire:
         assert find_placeholders(text) == [], text
@@ -75,6 +82,9 @@ def test_find_placeholders_catches_real_placeholders():
         "{{name}}",
         "Lorem ipsum",
         "XX%",
+        "[School Name]",
+        "[University Name]",
+        "[Degree]",
     ]
     for text in must_fire:
         assert find_placeholders(text) != [], text

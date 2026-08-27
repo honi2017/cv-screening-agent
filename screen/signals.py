@@ -36,8 +36,13 @@ _PLACEHOLDER_PATTERNS = (
     (re.compile(r"<[A-Z_]{3,30}>"), False),
 )
 
+# "school", "university", "state", and "city" are deliberately absent: they
+# are components of real institution and place names ("[Ohio State
+# University]", "[Penn State]"), not unambiguous form-field labels. The
+# genuine placeholders that use them ("[School Name]", "[University Name]")
+# are still caught via "name".
 _TEMPLATE_FIELD_WORDS = re.compile(
-    r"\b(?:name|title|email|phone|address|date|city|state|degree|school|university)\b", re.I
+    r"\b(?:name|title|email|phone|address|date|degree)\b", re.I
 )
 
 
