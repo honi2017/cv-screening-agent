@@ -392,10 +392,17 @@ _US_HINT_RE = re.compile(
 # whose names end in a country: "Santa Fe, New Mexico" was being eliminated by
 # the endswith country check, as were the real US towns "Mexico, Missouri",
 # "Denmark, South Carolina", "China, Maine", "Norway, Maine" and "Italy, Texas".
+#
+# "georgia" is deliberately ABSENT: it is the one US state name that is also a
+# sovereign country, so "Batumi, Georgia" is irreducibly ambiguous -- no
+# anchoring rule can tell US Georgia from the country. The two-letter code GA
+# still resolves US Georgia via _US_HINT_RE, so "Atlanta, GA" keeps working;
+# the deliberate trade is that a spelled-out "Atlanta, Georgia" now yields
+# unknown location -- a flag, not an elimination, which is the safe failure.
 _US_STATE_TIMEZONES = {
     "alabama": "CT", "alaska": "PT", "arizona": "MT", "arkansas": "CT",
     "california": "PT", "colorado": "MT", "connecticut": "ET", "delaware": "ET",
-    "florida": "ET", "georgia": "ET", "hawaii": "PT", "idaho": "MT",
+    "florida": "ET", "hawaii": "PT", "idaho": "MT",
     "illinois": "CT", "indiana": "ET", "iowa": "CT", "kansas": "CT",
     "kentucky": "ET", "louisiana": "CT", "maine": "ET", "maryland": "ET",
     "massachusetts": "ET", "michigan": "ET", "minnesota": "CT",
@@ -409,9 +416,14 @@ _US_STATE_TIMEZONES = {
     "west virginia": "ET", "wisconsin": "CT", "wyoming": "MT",
     "district of columbia": "ET",
 }
+# A state name must occupy the "City, State" slot, exactly as the two-letter code
+# does. Without the comma anchor this fired on a foreign place sharing a state
+# name ("Washington, United Kingdom" — a real English village) and cancelled a
+# correct non-US detection, and it fired on a candidate's own first name
+# ("Georgia Martinez"), fabricating a timezone from no location at all.
 # Longest first so "new mexico" wins over nothing and "west virginia" over "virginia".
 _US_STATE_NAME_RE = re.compile(
-    r"\b(" + "|".join(sorted(_US_STATE_TIMEZONES, key=len, reverse=True)) + r")\b",
+    r",\s*(" + "|".join(sorted(_US_STATE_TIMEZONES, key=len, reverse=True)) + r")\b",
     re.I,
 )
 

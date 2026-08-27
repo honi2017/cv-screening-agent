@@ -552,3 +552,60 @@ def test_header_email_domain_does_not_supply_residence_evidence():
     md = "# Jane Doe\njane.doe@vietnamsoftware.com\n555-123-4567\n"
     r = find_location(md, [])
     assert r["non_us_explicit"] is False
+
+
+# --- Fix verification: a spelled-out state name must sit in "City, State" -
+#
+# An unanchored state-name match cut both ways. It cancelled a genuine
+# non-US detection when a foreign place happens to share a state's name
+# ("Washington, United Kingdom" is a real English village) -- the state
+# match set us_evident=True and the existing "if us_evident: non_us = False"
+# rule wiped out the correct "united kingdom" elimination. And it fabricated
+# a timezone_hint from a candidate's own first name ("Georgia Martinez" has
+# no location in it at all), which matters because timezone_hint feeds the
+# real East-Coast/Midwest tiebreak between near-equal candidates -- a
+# fabricated tiebreak signal is not a safe direction the way an unwarranted
+# elimination-cancellation arguably is. The comma anchor requires a state
+# name to occupy the "City, State" slot, exactly like the two-letter code
+# already does. "georgia" is also deliberately absent from
+# _US_STATE_TIMEZONES: it is the one US state name that is also a sovereign
+# country, so no anchoring rule can disambiguate "Batumi, Georgia" from US
+# Georgia -- the two-letter code GA still resolves US Georgia unambiguously.
+
+
+def test_unanchored_state_name_no_longer_cancels_genuine_non_us():
+    r = find_location("Washington, United Kingdom", [])
+    assert r["non_us_explicit"] is True
+    assert r["us_evident"] is False
+
+
+def test_georgia_the_country_does_not_read_as_us_state():
+    # NOTE: not eliminated (non_us_explicit stays False) -- "georgia" is not,
+    # and must not become, an entry in _NON_US_COUNTRIES. It never has been
+    # in any round of this rule, and adding it now to make this case
+    # eliminate would reopen -- via the country-substring path instead of
+    # the state-name path -- exactly the bug this round is fixing: verified
+    # that adding "georgia" to _NON_US_COUNTRIES makes the candidate-name
+    # case below ("Georgia Martinez") ALSO eliminate, purely because the
+    # candidate's own first name contains the string "georgia". Unresolved
+    # "Georgia" therefore correctly degrades to unknown location -- a flag,
+    # not an elimination -- the same deliberate trade Fix 2's own comment
+    # describes for the state-name side of this ambiguity.
+    r = find_location("Batumi, Georgia", [])
+    assert r["non_us_explicit"] is False
+    assert r["us_evident"] is False
+
+
+def test_candidate_name_georgia_does_not_fabricate_timezone():
+    md = "# Georgia Martinez\nSoftware Engineer\nno address on this cv\n"
+    r = find_location(md, [])
+    assert r["us_evident"] is False
+    assert r["timezone_hint"] == "unknown"
+
+
+def test_atlanta_ga_two_letter_code_still_resolves_georgia():
+    # The deliberate trade for dropping "georgia" from the spelled-out map:
+    # the two-letter code GA still resolves US Georgia via _US_HINT_RE.
+    r = find_location("Atlanta, GA", [])
+    assert r["us_evident"] is True
+    assert r["timezone_hint"] == "ET"
