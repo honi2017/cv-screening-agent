@@ -51,13 +51,28 @@ re-report them; they appear in the prechecks below.
 - **Uniform bullet template.** Nearly every bullet follows the same shape —
   power verb, vague task, round percentage — with no system, tool, client, or
   scale named.
-- **Generic summary.** A summary that would fit any engineering job, or one
-  that echoes the job description's keywords in near-identical phrasing or
-  order.
-- **Skills without evidence.** A long skills list whose items appear nowhere
-  in the experience section.
+- **Generic summary.** The summary is *non-specific* — it would transfer
+  unchanged to a different employer and a different role, naming no system,
+  product, client type, scale, or technology. A summary that is specific but
+  happens to align with this job description is **not** this signal.
+  Alignment with the posting is expected and is Tier 3, not a defect.
+- **Skills without evidence.** The skills list is *long* **and** *most* of
+  its items appear nowhere in the experience section. This signal is about a
+  wall of keywords with almost nothing behind it, not about any single
+  unevidenced item — a handful of skills with no matching bullet is normal;
+  people list things they know without writing a bullet for each one. Do not
+  flag a CV over one or two unevidenced skills.
 - **No concrete nouns.** No product names, technologies, versions, scale
   figures, client types, or named tools anywhere in the CV.
+
+**Not a signal — mirroring the job description.** A CV that echoes the job
+description's language, keywords, or ordering is not a Tier 2 problem.
+Tailoring a CV to the posting it is applying to is standard, expected
+practice, and career-advice sources routinely tell applicants to do exactly
+this. Mirroring is Tier 3 and must not be flagged on its own. The only time
+mirroring is worth flagging is when it is accompanied by an actual factual
+problem — a claim the experience section does not support — and that is
+already Tier 1's `summary_contradicts_body`, not a Tier 2 `kind`.
 
 ### Tier 3 — not a problem, do not report
 
@@ -65,7 +80,10 @@ Polished, well-edited, obviously AI-assisted writing that is nonetheless
 **specific and internally consistent** is fine. Many strong candidates use AI
 to edit. Perfect grammar is not a defect. If the content is concrete and the
 claims hang together, report nothing — do not invent a Tier 3 flag just
-because the prose reads smoothly.
+because the prose reads smoothly. Language or ordering that mirrors the job
+description belongs here too, not in Tier 2. When you are uncertain whether
+something in this tier is actually a problem, do not flag it — a false
+elimination costs the company a good engineer.
 
 ## Other things worth flagging (Tier 2 unless clearly severe)
 
@@ -116,8 +134,14 @@ Return **only** this JSON object, with no prose before or after it:
 }
 ```
 
-Use these `kind` values where they apply: `wrong_company`,
-`summary_contradicts_body`, `template_placeholder`, `uniform_bullet_template`,
-`generic_summary`, `skills_without_evidence`, `no_concrete_nouns`,
-`seniority_mismatch`, `timeline_problem`. Use a short snake_case string of
-your own if none fit.
+Use one of these `kind` values — `wrong_company`, `summary_contradicts_body`,
+`template_placeholder`, `uniform_bullet_template`, `generic_summary`,
+`skills_without_evidence`, `no_concrete_nouns`, `seniority_mismatch`,
+`timeline_problem`. **Do not invent new `kind` categories.** Each `kind`
+carries a scoring consequence the pipeline applies mechanically, so a made-up
+`kind` has real effects on a real applicant. The one exception: a short
+snake_case string of your own, but only for a genuinely novel *defect* — an
+actual, concrete problem with the CV's honesty or content. A stylistic
+observation — the CV reads as if it mirrors the job description, the prose is
+unusually polished, the tone is confident — is not a defect and must not
+become a `kind`, invented or otherwise.

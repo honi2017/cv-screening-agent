@@ -1,6 +1,6 @@
 {
   "position_title": "Forward Deployed Engineer, Engineering",
-  "rubric_version": 2,
+  "rubric_version": 3,
   "precheck_rules_version": 2,
   "cap_fraction": 0.20,
   "quality_floor_delta": 5,
@@ -24,7 +24,7 @@
   },
   "gates": {
     "min_years": 4,
-    "tier2_gate_count": 3,
+    "tier2_gate_count": 4,
     "degree_required": false,
     "intra_dup_jaccard": 0.85,
     "pool_dup_tier1_count": 4,

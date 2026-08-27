@@ -85,26 +85,37 @@ def test_few_pool_duplicates_do_not_gate():
     assert gate is None
 
 
-def test_g2_three_tier2_flags():
+def test_g2_at_threshold_tier2_flags():
+    # Read the threshold from config rather than hardcoding it, so the
+    # number lives in one place (role.json) and this test tracks
+    # calibration changes.
+    threshold = int(CFG.gates["tier2_gate_count"])
     flags = [
-        {"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(3)
+        {"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(threshold)
     ]
     gate, reasons = apply_gates(precheck(), verdict(flags=flags), CFG)
     assert gate == "G2"
-    assert any("3" in r for r in reasons)
+    assert any(str(threshold) in r for r in reasons)
 
 
-def test_g2_not_triggered_by_two_tier2_flags():
-    flags = [{"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(2)]
+def test_g2_not_triggered_by_one_below_threshold():
+    threshold = int(CFG.gates["tier2_gate_count"])
+    flags = [
+        {"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"}
+        for i in range(threshold - 1)
+    ]
     gate, _ = apply_gates(precheck(), verdict(flags=flags), CFG)
     assert gate is None
 
 
 def test_metadata_signal_counts_half_and_cannot_gate_alone():
-    # Two judge Tier-2 flags plus metadata = 2.5, still below 3.
+    # Two judge Tier-2 flags plus metadata = 2.5, still below the (>= 3)
+    # threshold on its own.
+    threshold = int(CFG.gates["tier2_gate_count"])
     flags = [{"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(2)]
     pc = precheck(template_metadata_signal=True)
     assert tier2_count(pc, verdict(flags=flags), CFG) == 2.5
+    assert 2.5 < threshold
     gate, _ = apply_gates(pc, verdict(flags=flags), CFG)
     assert gate is None
 
@@ -121,6 +132,22 @@ def test_skills_count_below_threshold_does_not_contribute_signal():
     threshold = int(CFG.gates["skills_count_threshold"])
     pc = precheck(skills_count=threshold - 1)
     assert tier2_count(pc, verdict(), CFG) == 0
+
+
+def test_tier2_gate_count_raised_to_four():
+    # Fix 2: three common Tier-2 stylistic observations must no longer be
+    # enough to eliminate a candidate on their own -- four independent
+    # signals are required, so a genuine cluster of problems, not three
+    # coincidental style notes.
+    assert int(CFG.gates["tier2_gate_count"]) == 4
+
+    three = [{"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(3)]
+    gate, _ = apply_gates(precheck(), verdict(flags=three), CFG)
+    assert gate is None
+
+    four = [{"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(4)]
+    gate, _ = apply_gates(precheck(), verdict(flags=four), CFG)
+    assert gate == "G2"
 
 
 def test_g3_hidden_text():

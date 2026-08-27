@@ -52,6 +52,35 @@ def test_redflag_prompt_protects_bracketed_domain_objects_and_anonymised_employe
     assert "[Company A]" in text or "[Employer Redacted]" in text
 
 
+def test_redflag_prompt_says_jd_mirroring_is_tier3_not_flagged():
+    text = CFG.redflag_prompt().lower()
+    assert "mirror" in text
+    # The mirroring discussion must land in the "do not flag" / Tier 3
+    # territory, not be silent about it.
+    assert "tier 3" in text
+    assert "must not be flagged" in text
+
+
+def test_redflag_prompt_requires_skills_signal_to_be_long_list_mostly_unevidenced():
+    text = CFG.redflag_prompt().lower()
+    assert "skills without evidence" in text or "skills_without_evidence" in text
+    assert "long" in text
+    assert "most" in text
+
+
+def test_redflag_prompt_requires_generic_summary_to_be_transferable():
+    text = CFG.redflag_prompt().lower()
+    assert "transfer" in text
+    assert "different employer" in text
+    assert "different role" in text
+
+
+def test_redflag_prompt_tells_judge_not_to_invent_kind_values():
+    text = CFG.redflag_prompt().lower()
+    assert "do not invent new" in text
+    assert "kind" in text
+
+
 def test_fit_prompt_has_placeholders_including_redflag_result():
     text = CFG.fit_prompt()
     for token in ("{{REDACTED_CV}}", "{{PRECHECKS}}", "{{REDFLAG_RESULT}}"):
