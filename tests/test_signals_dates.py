@@ -91,6 +91,50 @@ def test_compute_years_confidence_low_with_single_or_no_range():
     assert compute_years("## Experience\nno dates here\n", TODAY)["computed"] == 0.0
 
 
+def test_extract_date_ranges_end_month_10_11_12_not_truncated():
+    # Regression: the month-group alternation in _MY previously tried the
+    # single-digit branch (0?[1-9]) before the two-digit branch (1[0-2]).
+    # Python's re alternation takes the first matching branch, not the
+    # longest, so "0?[1-9]" alone matched just the "1" in "12" and stopped.
+    # For the *end* date this month-number group is the last construct in
+    # _RANGE_RE, so nothing downstream ever failed to force a retry -- every
+    # Oct/Nov/Dec end-month silently collapsed to January, understating
+    # years of experience that feeds the 4-year elimination gate. The
+    # ordering "1[0-2]|0?[1-9]" in _MY is load-bearing; do not reorder it.
+    assert extract_date_ranges("### A (2019-01 - 2019-09)\n")[0].end == (2019, 9)
+    assert extract_date_ranges("### A (2019-01 - 2019-10)\n")[0].end == (2019, 10)
+    assert extract_date_ranges("### A (2019-01 - 2019-11)\n")[0].end == (2019, 11)
+    assert extract_date_ranges("### A (2019-01 - 2019-12)\n")[0].end == (2019, 12)
+
+
+def test_extract_date_ranges_start_month_10_and_12_not_truncated():
+    # Same alternation, start position: this one happened to self-correct via
+    # backtracking (the separator after it had to match), but pin it anyway
+    # so a future edit to _MY can't quietly break the start side either.
+    assert extract_date_ranges("### A (2019-09 - 2020-01)\n")[0].start == (2019, 9)
+    assert extract_date_ranges("### A (2019-10 - 2020-01)\n")[0].start == (2019, 10)
+    assert extract_date_ranges("### A (2019-12 - 2020-01)\n")[0].start == (2019, 12)
+
+
+def test_compute_years_reversed_range_downgrades_confidence_to_low():
+    # A transposed range ("2021-01 - 2019-01" instead of "2019-01 - 2021-01")
+    # is a typo, not a legitimate zero-length role. _merged_intervals already
+    # drops it from the total, so reporting "high" confidence anyway would
+    # hide the resulting undercount from gate G4 exactly when the gate stops
+    # consulting the judge's own estimate.
+    md = "## Experience\n### A (2015-01 - 2018-01)\n### B (2021-01 - 2019-01)\n"
+    result = compute_years(md, today=TODAY)
+    assert result["confidence"] == "low"
+    assert result["malformed_ranges"] == 1
+    assert abs(result["computed"] - 3.08) < 0.01
+
+
+def test_compute_years_valid_ranges_report_zero_malformed_ranges():
+    result = compute_years(MD, today=TODAY)
+    assert result["malformed_ranges"] == 0
+    assert result["confidence"] == "high"
+
+
 def test_short_stints_counts_sub_year_roles_in_window():
     ranges = [
         DateRange(start=(2025, 1), end=(2025, 6), precise=True, raw="a"),

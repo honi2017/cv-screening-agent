@@ -170,7 +170,6 @@ _MONTHS = {
     "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
 }
 
-_PRESENT = re.compile(r"\b(present|current|now|today|ongoing)\b", re.I)
 _SEP = r"(?:\s*(?:-|–|—|to|until|through)\s*)"
 
 # The two-digit branch (1[0-2]) MUST come before the single-digit branch
@@ -274,14 +273,27 @@ def compute_years(markdown: str, today: tuple[int, int]) -> dict[str, Any]:
     """Total professional experience in years from the union of date ranges.
 
     Confidence: high when 2+ ranges all carry months; medium when 2+ ranges but
-    some are year-only; low with fewer than 2 ranges (the judge's estimate wins).
+    some are year-only; low with fewer than 2 ranges, or when any range is
+    malformed (the judge's estimate wins in all of those cases).
     """
     ranges = extract_date_ranges(markdown)
     merged = _merged_intervals(ranges, today)
     months = sum(end - start + 1 for start, end in merged)
     years = round(months / 12, 2)
 
-    if len(ranges) < 2:
+    # A range whose end precedes its start is a typo (a transposed "2021-01 -
+    # 2019-01"). _merged_intervals already drops it from the total, but dropping
+    # it silently while still reporting "high" confidence would hide an
+    # undercount from gate G4 -- and "high" is precisely when the gate stops
+    # consulting the judge's own estimate. An unparseable range means the
+    # deterministic answer is untrustworthy, so hand the decision to the judge
+    # instead.
+    malformed = [
+        r for r in ranges
+        if r.end is not None and _to_months(r.end) < _to_months(r.start)
+    ]
+
+    if malformed or len(ranges) < 2:
         confidence = "low"
     elif all(r.precise for r in ranges):
         confidence = "high"
@@ -291,6 +303,7 @@ def compute_years(markdown: str, today: tuple[int, int]) -> dict[str, Any]:
     return {
         "computed": years if ranges else 0.0,
         "confidence": confidence,
+        "malformed_ranges": len(malformed),
         "ranges": [
             [f"{r.start[0]:04d}-{r.start[1]:02d}",
              "present" if r.end is None else f"{r.end[0]:04d}-{r.end[1]:02d}"]
