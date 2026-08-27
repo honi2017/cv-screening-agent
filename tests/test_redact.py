@@ -110,3 +110,99 @@ def test_preserves_latency_metrics_that_look_like_phone_numbers():
     r = redact("Reduced p99 latency from 1,250ms to 340ms.", {})
     assert "1,250ms" in r.text
     assert "340ms" in r.text
+
+
+def test_redacts_first_middle_last_header_to_single_token():
+    candidate = {"first_name": "Jordan", "last_name": "Vance", "email": "", "phone": ""}
+    md = (
+        "# Jordan Alexander Vance\n"
+        "jordan.vance@example.com\n\n"
+        "## Experience\n"
+        "- Product Manager, Initech (2020 - 2023)\n"
+    )
+    r = redact(md, candidate)
+    assert "Jordan Alexander Vance" not in r.text
+    assert "Jordan" not in r.text
+    assert "Vance" not in r.text
+    assert r.text.count("[NAME]") == 1
+
+
+def test_redacts_all_caps_header_name():
+    candidate = {"first_name": "Priya", "last_name": "Nair", "email": "", "phone": ""}
+    md = (
+        "# PRIYA NAIR\n"
+        "priya.nair@example.com\n\n"
+        "## Experience\n"
+        "- Data Analyst, Fabrikam (2021 - 2023)\n"
+    )
+    r = redact(md, candidate)
+    assert "PRIYA" not in r.text
+    assert "NAIR" not in r.text
+    assert "[NAME]" in r.text
+
+
+def test_redacts_surname_when_header_shows_different_given_name():
+    # Mirrors a real shape: the ATS record's first name doesn't appear on the
+    # CV at all (a preferred/married/nickname mismatch), so only the surname
+    # can be matched — and it sits right next to a capitalised given name that
+    # the guarded standalone matcher would normally treat as "adjacent
+    # capital, skip".
+    candidate = {"first_name": "Michael", "last_name": "Delgado", "email": "", "phone": ""}
+    md = (
+        "# Miguel Delgado\n"
+        "miguel.delgado@example.com\n\n"
+        "## Experience\n"
+        "- Operations Lead, Fenwick Group (2019 - 2022)\n"
+    )
+    r = redact(md, candidate)
+    assert "Delgado" not in r.text
+    assert "[NAME]" in r.text
+
+
+def test_over_redaction_guard_holds_outside_header():
+    candidate = {"first_name": "Bell", "last_name": "Grant", "email": "", "phone": ""}
+    md = (
+        "# Bell Grant\n"
+        "bell.grant@example.com\n\n"
+        "## Experience\n"
+        "- Senior Consultant, Bell Labs (2015 - 2018)\n"
+        "- Advisor, Morgan Stanley (2018 - 2020)\n"
+        "- Led a grant reporting initiative for nonprofit clients.\n"
+        "- Engagement partner, Grant Thornton (2020 - Present)\n"
+    )
+    r = redact(md, candidate)
+    assert "Bell Grant" not in r.text
+    assert "[NAME]" in r.text
+    assert "Bell Labs" in r.text
+    assert "Morgan Stanley" in r.text
+    assert "grant reporting" in r.text.lower()
+    assert "Grant Thornton" in r.text
+
+
+def test_header_window_stops_at_first_bullet():
+    # Without the bullet/heading stop, a short CV's bullets fall inside the
+    # unguarded header window and an employer name sharing the surname gets
+    # eaten too.
+    candidate = {"first_name": "Jamie", "last_name": "Ortiz", "email": "", "phone": ""}
+    md = (
+        "# Jamie Ortiz\n"
+        "jamie.ortiz@example.com\n"
+        "- Senior Analyst, Ortiz Data Partners (2019 - 2022)\n"
+        "- Grew regional revenue by 22%.\n"
+    )
+    r = redact(md, candidate)
+    assert "Jamie Ortiz" not in r.text
+    assert "Ortiz Data Partners" in r.text
+
+
+def test_redact_is_idempotent_for_middle_name_header():
+    candidate = {"first_name": "Jordan", "last_name": "Vance", "email": "", "phone": ""}
+    md = (
+        "# Jordan Alexander Vance\n"
+        "jordan.vance@example.com\n\n"
+        "## Experience\n"
+        "- Product Manager, Initech (2020 - 2023)\n"
+    )
+    once = redact(md, candidate).text
+    twice = redact(once, candidate).text
+    assert once == twice

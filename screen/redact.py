@@ -43,6 +43,26 @@ _ZIP_RE = re.compile(r"\b\d{5}(?:-\d{4})?\b")
 # Phone-like sequences that are actually dates or metrics must not be redacted.
 _PHONE_GUARD_RE = re.compile(r"^(?:19|20)\d{2}(?:[-/]\d{1,2})?$")
 
+# A bullet ("-", "*", "+"), a numbered list item, or a level-2+ heading marks
+# the end of the CV's contact block.
+_HEADER_END_RE = re.compile(r"^\s*(?:[-*+]\s|\d+[.)]\s|#{2,}\s)")
+
+
+def _header_region_end(lines: list[str]) -> int:
+    """Index one past the CV's contact block, which ends at the first bullet or
+    section heading. The candidate's name lives here and employer names do not,
+    so the adjacent-capital guard is dropped inside this window."""
+    seen = 0
+    for i, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if _HEADER_END_RE.match(line):
+            return i
+        seen += 1
+        if seen >= 5:
+            return i + 1
+    return len(lines)
+
 
 @dataclass(frozen=True)
 class RedactionResult:
@@ -116,14 +136,51 @@ def redact(markdown: str, candidate: dict[str, Any]) -> RedactionResult:
     text, n = _sub_counting(_EMAIL_RE, "[EMAIL]", text)
     bump("email", n)
 
-    # 2. Known name values from the ATS record. Full name first (a two-token
-    # exact match is a strong, low-risk signal so it stays case-insensitive to
-    # also catch an ALL-CAPS header); first/last alone go through the guarded,
-    # case-sensitive helper above.
+    # 2. Known name values from the ATS record.
     first = str(candidate.get("first_name") or "").strip()
     last = str(candidate.get("last_name") or "").strip()
     full = f"{first} {last}".strip()
     n_name = 0
+
+    # 2a. First-through-last span, tolerant of a middle name/initial and of an
+    # ALL-CAPS header. Requiring both the first and last name with only
+    # capitalised tokens between them is a very strong signal — an employer
+    # name essentially never matches it — so this stays case-insensitive.
+    if len(first) > 2 and len(last) > 2:
+        span = re.compile(
+            rf"\b{re.escape(first)}(?:\s+[A-Z][A-Za-z.'\-]*){{0,2}}\s+{re.escape(last)}\b",
+            re.I,
+        )
+        text, n = _sub_counting(span, "[NAME]", text)
+        n_name += n
+
+    # 2b. Unguarded name substitution inside the CV's header region only (see
+    # _header_region_end). The contact block at the top is where the name
+    # lives and where employer names essentially never appear, so the
+    # adjacent-capital guard is counterproductive there. This also covers a
+    # header that shows a different given name than the ATS record: the
+    # surname alone still gets redacted even though it sits next to a
+    # capitalised (but non-matching) given name that would otherwise trip the
+    # guard in _standalone_name_sub.
+    lines = text.split("\n")
+    header_end = _header_region_end(lines)
+    if header_end > 0:
+        header_text = "\n".join(lines[:header_end])
+        for value in (first, last):
+            if len(value) > 2:
+                header_text, n = _sub_counting(
+                    re.compile(rf"\b{re.escape(value)}\b", re.I), "[NAME]", header_text
+                )
+                n_name += n
+        if header_end < len(lines):
+            text = header_text + "\n" + "\n".join(lines[header_end:])
+        else:
+            text = header_text
+
+    # 2c. Full name elsewhere in the document (no middle name; a two-token
+    # exact match is a strong, low-risk signal so it stays case-insensitive to
+    # also catch an ALL-CAPS occurrence); first/last alone go through the
+    # guarded, case-sensitive helper above.
     if len(full) > 2:
         text, n = _sub_counting(re.compile(rf"\b{re.escape(full)}\b", re.I), "[NAME]", text)
         n_name += n
