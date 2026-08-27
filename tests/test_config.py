@@ -32,7 +32,7 @@ def test_scalars_load():
     assert cfg.calibration_window == 5
     assert cfg.bonus_max == 5
     assert cfg.rubric_version == 1
-    assert cfg.precheck_rules_version == 1
+    assert cfg.precheck_rules_version == 2
     assert cfg.gates["min_years"] == 4
     assert cfg.penalties["no_linkedin"] == 8
 

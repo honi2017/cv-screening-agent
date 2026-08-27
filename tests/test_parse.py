@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from screen.parse import UnsupportedFormatError, parse_pdf, sha256_file, write_parsed
+from screen.parse import UnsupportedFormatError, _is_substantive, parse_pdf, sha256_file, write_parsed
 
 import sys
 
@@ -54,6 +54,55 @@ def test_clean_cv_has_no_hidden_text(pdfs):
     p = parse_pdf(pdfs["clean"])
     assert p.hidden_text["found"] is False
     assert p.hidden_text["spans"] == []
+
+
+# --- G3 false-positive guard (real-data calibration fix) --------------------
+#
+# Measured against 66 real CVs, gate G3 fired on 3/66 and all three were
+# false positives: a large white name on a dark header banner, and two
+# Google Docs -> PDF exports where the bullet marker is drawn as an
+# invisible single "•" glyph. Keyword stuffing is always a run of terms, so
+# _is_substantive gates `found` on span content, not merely on colour/size.
+
+
+def test_is_substantive_requires_a_run_of_words():
+    assert _is_substantive("forward deployed engineer SAML SFTP private markets") is True
+
+
+def test_is_substantive_rejects_a_short_title():
+    assert _is_substantive("Jordan Lee") is False
+
+
+def test_is_substantive_rejects_a_bullet_glyph():
+    assert _is_substantive("•") is False
+
+
+def test_white_title_on_dark_banner_does_not_gate(pdfs):
+    p = parse_pdf(pdfs["white_title"])
+    assert p.hidden_text["found"] is False
+    assert any(s["kind"] == "white_on_white" for s in p.hidden_text["spans"])
+    assert all(s["substantive"] is False for s in p.hidden_text["spans"])
+
+
+def test_bullet_glyph_run_does_not_gate(pdfs):
+    p = parse_pdf(pdfs["bullet_glyphs"])
+    assert p.hidden_text["found"] is False
+    spans = p.hidden_text["spans"]
+    assert len(spans) >= 15
+    assert all(s["substantive"] is False for s in spans)
+
+
+def test_keyword_stuffing_run_still_gates(pdfs):
+    # Regression: the real fixtures below still trip found=True after the
+    # substantive filter -- calibration must not blind the detector to
+    # genuine stuffing.
+    p = parse_pdf(pdfs["hidden_text"])
+    assert p.hidden_text["found"] is True
+    assert any(s["substantive"] is True for s in p.hidden_text["spans"])
+
+    p2 = parse_pdf(pdfs["invisible_text"])
+    assert p2.hidden_text["found"] is True
+    assert any(s["substantive"] is True for s in p2.hidden_text["spans"])
 
 
 def test_scanned_pdf_yields_almost_no_text(pdfs):

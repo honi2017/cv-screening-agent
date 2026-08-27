@@ -1,7 +1,7 @@
 {
   "position_title": "Forward Deployed Engineer, Engineering",
   "rubric_version": 1,
-  "precheck_rules_version": 1,
+  "precheck_rules_version": 2,
   "cap_fraction": 0.20,
   "quality_floor_delta": 5,
   "calibration_window": 5,

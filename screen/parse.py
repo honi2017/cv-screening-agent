@@ -9,6 +9,7 @@ import contextlib
 import hashlib
 import io
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -81,6 +82,20 @@ def _suppressed_pymupdf_messages():
         pymupdf.set_messages(stream=previous)
 
 
+def _is_substantive(text: str) -> bool:
+    """True when a hidden span carries enough content to be keyword stuffing.
+
+    G3 is a hard elimination, so it must not fire on rendering artifacts.
+    Measured against 66 real CVs, the only white spans present were a large
+    white name on a dark header banner and runs of 0.75pt "•" bullet glyphs from
+    a Google Docs PDF export — 3 of 66 candidates would have been eliminated for
+    how their PDF was produced. Genuine stuffing is always a run of terms.
+    """
+    words = re.findall(r"[A-Za-z][A-Za-z0-9+#.\-]*", text or "")
+    alnum = sum(ch.isalnum() for ch in text or "")
+    return len(words) >= 5 and alnum >= 25
+
+
 def _luminance(color_int: int) -> float:
     r = ((color_int >> 16) & 0xFF) / 255
     g = ((color_int >> 8) & 0xFF) / 255
@@ -107,11 +122,23 @@ def _hidden_spans(doc: pymupdf.Document) -> list[dict[str, Any]]:
                     size = float(span.get("size", 12.0))
                     if color == _WHITE or _luminance(color) >= _LUMINANCE_HIDDEN:
                         spans.append(
-                            {"page": pno, "kind": "white_on_white", "text": text[:200], "size": size}
+                            {
+                                "page": pno,
+                                "kind": "white_on_white",
+                                "text": text[:200],
+                                "size": size,
+                                "substantive": _is_substantive(text),
+                            }
                         )
                     elif size < _MICRO_FONT_PT:
                         spans.append(
-                            {"page": pno, "kind": "micro_font", "text": text[:200], "size": size}
+                            {
+                                "page": pno,
+                                "kind": "micro_font",
+                                "text": text[:200],
+                                "size": size,
+                                "substantive": _is_substantive(text),
+                            }
                         )
 
         try:
@@ -122,7 +149,13 @@ def _hidden_spans(doc: pymupdf.Document) -> list[dict[str, Any]]:
                 text = "".join(chr(c[0]) for c in chars if isinstance(c, (list, tuple)) and c).strip()
                 if text:
                     spans.append(
-                        {"page": pno, "kind": "invisible_render_mode", "text": text[:200], "size": None}
+                        {
+                            "page": pno,
+                            "kind": "invisible_render_mode",
+                            "text": text[:200],
+                            "size": None,
+                            "substantive": _is_substantive(text),
+                        }
                     )
         except Exception:
             # get_texttrace is best-effort; the colour and size checks above are
@@ -149,10 +182,12 @@ def _parse_pdf_file(pdf_path: Path) -> ParsedPdf:
     finally:
         doc.close()
 
+    found = any(s["substantive"] for s in spans)
+
     return ParsedPdf(
         markdown=markdown,
         meta=meta,
-        hidden_text={"found": bool(spans), "spans": spans},
+        hidden_text={"found": found, "spans": spans},
         pages=pages,
         sha256=sha256_file(pdf_path),
         text_chars=len(markdown.strip()),

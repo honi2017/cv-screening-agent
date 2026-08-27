@@ -202,6 +202,53 @@ def _write_invisible_text_pdf(path: Path) -> Path:
     return path
 
 
+def _write_white_title_pdf(path: Path) -> Path:
+    """A visually normal CV whose only white span is a two-word name set large
+    on a dark header banner -- the real false positive from candidate
+    71383156 (font size 26.25, white on a dark banner rendered as a filled
+    rectangle we don't attempt to sample). Not hidden text: light text on a
+    dark background, a common CV design. G3 must not fire on this.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.draw_rect(pymupdf.Rect(0, 0, 595, 90), color=(0.1, 0.1, 0.12), fill=(0.1, 0.1, 0.12))
+    page.insert_text((50, 60), "Jordan Lee", fontsize=26.25, fontname="helv", color=(1, 1, 1))
+    page.insert_textbox(
+        pymupdf.Rect(50, 110, 545, 700), CLEAN, fontsize=9, fontname="helv"
+    )
+    doc.set_metadata({"producer": "TestSuite", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
+def _write_bullet_glyph_pdf(path: Path) -> Path:
+    """A visually normal CV with a run of white single-bullet spans -- the
+    Google Docs -> PDF export artifact behind candidates 71484543 and
+    71509244 (PDF producer Skia/PDF): the bullet marker text is drawn
+    invisibly at ~0.75pt because the visible bullet glyph is painted
+    separately as a vector. Each span carries only "•", never a run of
+    words, so G3 must not fire on this.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        pymupdf.Rect(50, 50, 545, 400), CLEAN, fontsize=9, fontname="helv"
+    )
+    for i in range(20):
+        page.insert_text(
+            (50, 420 + i * 12),
+            "•",
+            fontsize=0.75,
+            fontname="helv",
+            color=(1, 1, 1),
+        )
+    doc.set_metadata({"producer": "Skia/PDF", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
 def _write_scanned_pdf(path: Path) -> Path:
     """A page with no extractable text, standing in for a scanned CV."""
     doc = pymupdf.open()
@@ -273,6 +320,8 @@ def build_all(out_dir: Path) -> dict[str, Path]:
         "four_year": _write_text_pdf(out_dir / "four_year.pdf", FOUR_YEAR),
         "hidden_text": _write_hidden_text_pdf(out_dir / "hidden_text.pdf"),
         "invisible_text": _write_invisible_text_pdf(out_dir / "invisible_text.pdf"),
+        "white_title": _write_white_title_pdf(out_dir / "white_title.pdf"),
+        "bullet_glyphs": _write_bullet_glyph_pdf(out_dir / "bullet_glyphs.pdf"),
         "scanned": _write_scanned_pdf(out_dir / "scanned.pdf"),
         "clean_docx": _write_docx(out_dir / "clean.docx", CLEAN),
     }
