@@ -7,7 +7,9 @@ fonts — that are hard to author by hand.
 
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
+from xml.sax.saxutils import escape as _xml_escape
 
 import pymupdf
 
@@ -177,6 +179,56 @@ def _write_scanned_pdf(path: Path) -> Path:
     return path
 
 
+_DOCX_CONTENT_TYPES = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+    '<Default Extension="rels" '
+    'ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+    '<Default Extension="xml" ContentType="application/xml"/>'
+    '<Override PartName="/word/document.xml" '
+    'ContentType="application/vnd.openxmlformats-officedocument'
+    '.wordprocessingml.document.main+xml"/>'
+    "</Types>"
+)
+
+_DOCX_RELS = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+    '<Relationship Id="rId1" '
+    'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" '
+    'Target="word/document.xml"/>'
+    "</Relationships>"
+)
+
+_DOCX_DOCUMENT_TEMPLATE = (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n'
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+    "<w:body>{paragraphs}</w:body>"
+    "</w:document>"
+)
+
+
+def _docx_paragraph(line: str) -> str:
+    return f'<w:p><w:r><w:t xml:space="preserve">{_xml_escape(line)}</w:t></w:r></w:p>'
+
+
+def _write_docx(path: Path, body: str) -> Path:
+    """Build a minimal, valid `.docx` (a zip of OOXML parts), one paragraph
+    per line of `body`. Hand-rolled rather than pulled in from a docx-writing
+    library so the only new dependency this project takes on for DOCX support
+    is the reader (docx2txt) actually used at runtime — this writer only ever
+    runs inside the test suite.
+    """
+    document_xml = _DOCX_DOCUMENT_TEMPLATE.format(
+        paragraphs="".join(_docx_paragraph(line) for line in body.splitlines())
+    )
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("[Content_Types].xml", _DOCX_CONTENT_TYPES)
+        zf.writestr("_rels/.rels", _DOCX_RELS)
+        zf.writestr("word/document.xml", document_xml)
+    return path
+
+
 def build_all(out_dir: Path) -> dict[str, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
     return {
@@ -188,6 +240,7 @@ def build_all(out_dir: Path) -> dict[str, Path]:
         "hidden_text": _write_hidden_text_pdf(out_dir / "hidden_text.pdf"),
         "invisible_text": _write_invisible_text_pdf(out_dir / "invisible_text.pdf"),
         "scanned": _write_scanned_pdf(out_dir / "scanned.pdf"),
+        "clean_docx": _write_docx(out_dir / "clean.docx", CLEAN),
     }
 
 

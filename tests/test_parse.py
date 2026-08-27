@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from screen.parse import parse_pdf, sha256_file, write_parsed
+from screen.parse import UnsupportedFormatError, parse_pdf, sha256_file, write_parsed
 
 import sys
 
@@ -72,3 +72,26 @@ def test_write_parsed_writes_markdown_and_meta(tmp_path, pdfs):
     assert loaded["sha256"] == p.sha256
     assert loaded["pages"] == 1
     assert loaded["hidden_text"]["found"] is False
+
+
+def test_parse_docx_extracts_text_and_marks_no_hidden_text_possible(pdfs):
+    p = parse_pdf(pdfs["clean_docx"])
+    assert p.text_chars > 200
+    assert "Northwind Data" in p.markdown
+    assert "SAML" in p.markdown
+    assert p.pages == 0
+    assert p.meta["producer"] == ""
+    assert p.meta["creator"] == ""
+    assert p.hidden_text == {"found": False, "spans": []}
+
+
+def test_parse_docx_sha256_matches_helper(pdfs):
+    p = parse_pdf(pdfs["clean_docx"])
+    assert p.sha256 == sha256_file(pdfs["clean_docx"])
+
+
+def test_unsupported_extension_is_rejected(tmp_path):
+    bogus = tmp_path / "resume.rtf"
+    bogus.write_text("{\\rtf1 not a pdf or docx}")
+    with pytest.raises(UnsupportedFormatError):
+        parse_pdf(bogus)

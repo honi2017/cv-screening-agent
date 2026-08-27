@@ -1,5 +1,6 @@
-"""PDF to markdown, plus the two forensic signals we can only get from the PDF:
-document metadata and text that was never meant to be seen.
+"""PDF and DOCX resumes to markdown/text, plus the two forensic signals we can
+only get from a PDF: document metadata and text that was never meant to be
+seen.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import docx2txt
 import pymupdf
 import pymupdf4llm
 
@@ -39,6 +41,16 @@ class ParsedPdf:
             "pdf_meta": self.meta,
             "hidden_text": self.hidden_text,
         }
+
+
+class UnsupportedFormatError(ValueError):
+    """Raised when a resume's extension is neither `.pdf` nor `.docx`.
+
+    Callers (the precheck stage) should catch this and record the candidate
+    as `needs_review: unsupported_format` rather than letting it propagate.
+    """
+
+    reason = "unsupported_format"
 
 
 def sha256_file(path: Path) -> str:
@@ -120,7 +132,7 @@ def _hidden_spans(doc: pymupdf.Document) -> list[dict[str, Any]]:
     return spans
 
 
-def parse_pdf(pdf_path: Path) -> ParsedPdf:
+def _parse_pdf_file(pdf_path: Path) -> ParsedPdf:
     doc = pymupdf.open(pdf_path)
     try:
         with _suppressed_pymupdf_messages():
@@ -145,6 +157,44 @@ def parse_pdf(pdf_path: Path) -> ParsedPdf:
         sha256=sha256_file(pdf_path),
         text_chars=len(markdown.strip()),
     )
+
+
+def _parse_docx_file(docx_path: Path) -> ParsedPdf:
+    """Extract text from a `.docx` resume.
+
+    DOCX has no equivalent of the PDF white-on-white or invisible-render-mode
+    keyword-stuffing tricks `_hidden_spans` looks for above — a plain text
+    extractor never sees a font colour or a render mode, those are PDF paint
+    operators — so `hidden_text` is always empty here and gate G3 (hidden
+    text) simply cannot fire on a DOCX resume. `pages` has no cheap
+    equivalent without a layout/renderer, so it is reported as 0 rather than
+    guessed, and `producer`/`creator` are left blank since docx2txt does not
+    surface core-properties metadata.
+    """
+    text = docx2txt.process(str(docx_path)) or ""
+    return ParsedPdf(
+        markdown=text,
+        meta={"producer": "", "creator": "", "created": "", "modified": ""},
+        hidden_text={"found": False, "spans": []},
+        pages=0,
+        sha256=sha256_file(docx_path),
+        text_chars=len(text.strip()),
+    )
+
+
+def parse_pdf(path: Path) -> ParsedPdf:
+    """Parse a resume file into a `ParsedPdf`, dispatching on file extension.
+
+    Kept as `parse_pdf` (rather than a more generic name) for interface
+    stability — downstream code depends on this exact name — even though it
+    now also handles `.docx`.
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _parse_pdf_file(path)
+    if suffix == ".docx":
+        return _parse_docx_file(path)
+    raise UnsupportedFormatError(f"unsupported resume format: {path.suffix or '(none)'}")
 
 
 def write_parsed(parsed: ParsedPdf, md_path: Path, meta_path: Path) -> None:
