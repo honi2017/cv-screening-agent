@@ -15,29 +15,19 @@ from screen.text import find_section, jaccard, normalize
 
 # --- Placeholders -----------------------------------------------------------
 
-# Placeholders are a Tier 1 hard gate: a hit silently and unappealably rejects a
-# candidate, so this detector only fires on markers that CANNOT be legitimate CV
-# content. Deliberately absent: two-word bracketed field labels like
-# "[Company Name]". They are grammatically identical to legitimate domain objects
-# an engineer would cite ("[Tracking Number]", "[Case Number]", "[IP Address]"),
-# so telling them apart needs the surrounding sentence — a judgement call that
-# belongs to the RedFlag judge pass, not here. Four successive regex designs were
-# each defeated by a realistic phrase before this boundary was drawn; do not
-# reintroduce a generic bracket-label pattern without reading that history.
-
-# ALL_CAPS token, but only when it names an applicant form field: an engineer
-# legitimately cites env vars like <DATABASE_URL> and <API_KEY>. Named
-# separately (rather than inlined below) so find_placeholders can identify it
-# by identity and apply the extra _SELF_FIELD_TOKEN check only to this pattern.
-_ALL_CAPS_TOKEN_RE = re.compile(r"<[A-Z][A-Z_]{2,29}>")
-
-# Applied only to the ALL_CAPS-token pattern above.
-_SELF_FIELD_TOKEN = re.compile(
-    r"(?:CANDIDATE|APPLICANT|COMPANY|EMPLOYER|POSITION|JOB|FULL|YOUR|SCHOOL|UNIVERSITY)"
-    r"|(?:NAME|TITLE|EMAIL|PHONE)$",
-    re.I,
-)
-
+# Tier 1 is a hard gate: a hit silently and unappealably rejects a candidate, so
+# this fires only on syntax that cannot plausibly occur in genuine CV prose.
+#
+# Deliberately absent, after five successive designs were each defeated by a
+# realistic phrase:
+#   - two-word bracketed field labels ("[Company Name]") — grammatically
+#     identical to legitimate domain objects ("[Tracking Number]", "[IP Address]")
+#   - ALL_CAPS angle-bracket tokens ("<COMPANY_NAME>") — identical in shape to the
+#     env-var references an integration engineer cites ("<DB_NAME>", "<API_KEY>")
+# Both classes now belong to the RedFlag judge pass, which can read the
+# surrounding sentence. Every failed design keyed on "a field word appears inside
+# the delimiter"; that approach cannot work, because engineers legitimately
+# bracket things whose names contain those words. Do not reintroduce one.
 _PLACEHOLDER_PATTERNS = (
     # Second person: nobody names a domain object "[Your Company]".
     re.compile(r"\[\s*your\b[^\]\n]{0,30}\]", re.I),
@@ -47,7 +37,6 @@ _PLACEHOLDER_PATTERNS = (
     re.compile(r"lorem\s+ipsum", re.I),
     re.compile(r"\b(?:x{1,3}|n{2,3})\s?%", re.I),
     re.compile(r"\{\{[^}\n]{1,40}\}\}"),
-    _ALL_CAPS_TOKEN_RE,
 )
 
 
@@ -58,8 +47,6 @@ def find_placeholders(text: str) -> list[dict[str, Any]]:
     for pattern in _PLACEHOLDER_PATTERNS:
         for m in pattern.finditer(text):
             match = m.group(0).strip()
-            if pattern is _ALL_CAPS_TOKEN_RE and not _SELF_FIELD_TOKEN.search(match.strip("<>")):
-                continue
             key = match.lower()
             if key in seen:
                 continue

@@ -51,7 +51,7 @@ def test_find_placeholders_ignores_normal_brackets():
 def test_find_placeholders_ignores_realistic_false_positive_classes():
     # Every one of these is real phrasing for a senior integration/consulting
     # engineer, not an unfilled template. A Tier 1 hit here is a silent,
-    # unappealable rejection of a qualified applicant. Four earlier designs
+    # unappealable rejection of a qualified applicant. Five earlier designs
     # of this detector were each defeated by one of these classes in turn:
     #   - "insert" as a bare database verb ("batch insert operations")
     #   - lowercase generic brackets ("[role-based access control]", "[job queue]")
@@ -65,11 +65,14 @@ def test_find_placeholders_ignores_realistic_false_positive_classes():
     #     to a template label ("[Tracking Number]", "[IP Address]") -- this
     #     is why the detector no longer has ANY generic bracket-label
     #     pattern; see test_find_placeholders_documents_deliberate_false_negatives
-    #   - ALL_CAPS env-var tokens in angle brackets ("<DATABASE_URL>", "<API_KEY>")
+    #   - ALL_CAPS env-var tokens in angle brackets ("<DB_NAME>", "<API_KEY>",
+    #     "<SERVICE_NAME>") -- a field-word-inside-the-delimiter check keeps
+    #     failing the same way regardless of the delimiter shape, so there is
+    #     no ALL_CAPS-token pattern left either
     # The current design only fires on markers that CANNOT be legitimate CV
     # content: "[Your ...]" (second person), "insert" inside an explicit
-    # delimiter, lorem ipsum, XX%/NN%, {{mustache}}, and ALL_CAPS angle-bracket
-    # tokens that name an applicant field specifically (not just any env var).
+    # delimiter, lorem ipsum, XX%/NN%, and {{mustache}}. That's it -- five
+    # patterns, no bracket-label or ALL_CAPS-token pattern of any kind.
     must_not_fire = [
         # NDA-anonymised employers / candidate-facing product nouns: field
         # word present but not the head.
@@ -118,10 +121,19 @@ def test_find_placeholders_ignores_realistic_false_positive_classes():
         "Owned [Policy Number] lookups for the claims platform",
         "Normalised [IP Address] geolocation lookups",
         "Tracked the [Release Date] field",
-        # ALL_CAPS angle-bracket tokens that are ordinary env vars, not
-        # applicant form fields.
+        # ALL_CAPS angle-bracket tokens: env vars are the same shape as an
+        # applicant-field token, and this pool cites <DB_NAME> far more often
+        # than it leaves behind <CANDIDATE_NAME> -- so the ALL_CAPS pattern
+        # was deleted entirely rather than narrowed a sixth time.
         "Documented <DATABASE_URL> and <API_KEY> in the onboarding runbook",
         "Configured <REDIS_HOST> for staging",
+        "Configured <DB_NAME> and <DB_HOST> for the migration",
+        "Set the <TABLE_NAME> env var for the ETL job",
+        "Documented <SERVICE_NAME> routing in the runbook",
+        "Set <USER_EMAIL> in the notification template",
+        "Rotated <COMPANY_API_KEY> quarterly",
+        "Tuned <JOB_QUEUE_NAME> throughput",
+        "Built <FULL_TEXT_INDEX> search",
     ]
     for text in must_not_fire:
         assert find_placeholders(text) == [], text
@@ -130,8 +142,9 @@ def test_find_placeholders_ignores_realistic_false_positive_classes():
 def test_find_placeholders_catches_real_placeholders():
     # Only markers that cannot be legitimate CV content: second-person
     # brackets, delimited "insert" instructions, mustache tags, lorem ipsum,
-    # unfilled XX%/NN% metrics, and ALL_CAPS angle-bracket tokens that
-    # explicitly name an applicant field (not just any env var).
+    # and unfilled XX%/NN% metrics. No ALL_CAPS angle-bracket pattern exists
+    # any more (see test_find_placeholders_documents_deliberate_false_negatives) --
+    # <CANDIDATE_NAME>/<COMPANY_NAME>/<FULL_NAME> no longer fire by design.
     must_fire = [
         "[Your Name]",
         "[Your Email]",
@@ -140,12 +153,9 @@ def test_find_placeholders_catches_real_placeholders():
         "[your company]",
         "[Insert metric here]",
         "{INSERT COMPANY NAME}",
-        "<CANDIDATE_NAME>",
-        "<COMPANY_NAME>",
-        "<FULL_NAME>",
         "{{name}}",
         "{{company}}",
-        "Lorem ipsum dolor",
+        "Lorem ipsum dolor sit amet",
         "Improved throughput by XX%",
         "Reduced cost by NN%",
     ]
@@ -154,22 +164,36 @@ def test_find_placeholders_catches_real_placeholders():
 
 
 def test_find_placeholders_documents_deliberate_false_negatives():
-    # These ARE genuine, unfilled template labels -- but they are also
-    # grammatically identical to legitimate domain objects an engineer would
-    # cite in a real bullet ("[Tracking Number]", "[Case Number]", "[IP
-    # Address]"). Telling a template label apart from a domain object needs
+    # These ARE genuine, unfilled template labels -- both the bracketed
+    # ("[Company Name]") and the ALL_CAPS angle-bracket ("<CANDIDATE_NAME>")
+    # families. But both shapes are indistinguishable, mechanically, from
+    # legitimate CV content an engineer would write: a bracketed field label
+    # is grammatically identical to a domain object ("[Tracking Number]",
+    # "[Case Number]", "[IP Address]"), and an ALL_CAPS angle-bracket token is
+    # identical in shape to an env-var reference ("<DB_NAME>", "<API_KEY>") --
+    # which this candidate pool cites far more often than it leaves behind an
+    # unfilled template token. Telling either apart from real content needs
     # the surrounding sentence, which is a judgement call left to the RedFlag
-    # judge pass, not this mechanical detector. Four successive regex designs
+    # judge pass, not this mechanical detector. Five successive regex designs
     # were each defeated by a realistic phrase before this boundary was
-    # deliberately drawn here (see task-4-report.md, Fix 4) -- a failure in
-    # this test is not a bug to fix by re-adding a generic bracket-label
-    # pattern.
+    # deliberately drawn here (see task-4-report.md) -- a failure in this
+    # test is not a bug to fix by reintroducing a generic bracket-label or
+    # ALL_CAPS-token pattern.
     must_not_fire = [
         "[Company Name]",
         "[Position Title]",
         "[Phone Number]",
         "[Email Address]",
         "[Job Title]",
+        "[FULL NAME]",
+        "[Employer Name]",
+        "[School Name]",
+        "[University Name]",
+        "[Contact Number]",
+        "[Candidate Name]",
+        "[Company_Name]",
+        "<CANDIDATE_NAME>",
+        "<COMPANY_NAME>",
     ]
     for text in must_not_fire:
         assert find_placeholders(text) == [], text
