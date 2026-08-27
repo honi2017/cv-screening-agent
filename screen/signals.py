@@ -386,6 +386,35 @@ _US_HINT_RE = re.compile(
     r"|\b(United States|USA|U\.S\.A\.?|U\.S\.?|US)(?!\w)"
 )
 
+# Spelled-out US state names, mapped to timezone. _US_HINT_RE only recognises
+# two-letter codes and "United States"/"USA"/"US", so "Boston, Massachusetts"
+# previously yielded unknown location. This also resolves the class of US places
+# whose names end in a country: "Santa Fe, New Mexico" was being eliminated by
+# the endswith country check, as were the real US towns "Mexico, Missouri",
+# "Denmark, South Carolina", "China, Maine", "Norway, Maine" and "Italy, Texas".
+_US_STATE_TIMEZONES = {
+    "alabama": "CT", "alaska": "PT", "arizona": "MT", "arkansas": "CT",
+    "california": "PT", "colorado": "MT", "connecticut": "ET", "delaware": "ET",
+    "florida": "ET", "georgia": "ET", "hawaii": "PT", "idaho": "MT",
+    "illinois": "CT", "indiana": "ET", "iowa": "CT", "kansas": "CT",
+    "kentucky": "ET", "louisiana": "CT", "maine": "ET", "maryland": "ET",
+    "massachusetts": "ET", "michigan": "ET", "minnesota": "CT",
+    "mississippi": "CT", "missouri": "CT", "montana": "MT", "nebraska": "CT",
+    "nevada": "PT", "new hampshire": "ET", "new jersey": "ET",
+    "new mexico": "MT", "new york": "ET", "north carolina": "ET",
+    "north dakota": "CT", "ohio": "ET", "oklahoma": "CT", "oregon": "PT",
+    "pennsylvania": "ET", "rhode island": "ET", "south carolina": "ET",
+    "south dakota": "CT", "tennessee": "CT", "texas": "CT", "utah": "MT",
+    "vermont": "ET", "virginia": "ET", "washington": "PT",
+    "west virginia": "ET", "wisconsin": "CT", "wyoming": "MT",
+    "district of columbia": "ET",
+}
+# Longest first so "new mexico" wins over nothing and "west virginia" over "virginia".
+_US_STATE_NAME_RE = re.compile(
+    r"\b(" + "|".join(sorted(_US_STATE_TIMEZONES, key=len, reverse=True)) + r")\b",
+    re.I,
+)
+
 # "viet nam" is ordered before "vietnam" and "united kingdom" stays ahead of
 # any of its own substrings: `_is_residence_evidence` below matches a value
 # against this tuple with `endswith`, which is order-independent for `any()`
@@ -579,11 +608,18 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
         # _is_residence_evidence for the shape check that replaced it.
         non_us = _is_residence_evidence(raw)
     else:
-        # A CV contact-header line is an address by convention, so the
-        # cheaper substring scan over just the first 3 non-empty lines is
-        # fine here (and is what test_find_location_non_us_explicit relies
-        # on for a bare "Hanoi, Vietnam" with no ATS data at all).
-        non_us = any(c in "\n".join(lines[:3]).lower() for c in _NON_US_COUNTRIES)
+        # A CV contact-header line is an address by convention, so this path
+        # stays looser than the ATS-field path in other respects (no
+        # intent-language check, no address-shape requirement -- a header
+        # line already reads like "City, ST/Country"). But a domain or email
+        # is never a place on either path: without stripping it out first, a
+        # header containing "jane.doe@vietnamsoftware.com" on one line and a
+        # genuine "Boston, MA" on another would set non_us_explicit purely
+        # from the email's domain. Strip matched domain/email substrings
+        # (rather than bailing out on the whole scope) so a real address on
+        # a different header line still counts.
+        header_scope = _NOT_A_PLACE_RE.sub(" ", "\n".join(lines[:3]))
+        non_us = any(c in header_scope.lower() for c in _NON_US_COUNTRIES)
 
     # Check both the CV body AND the ATS value itself: a location field can
     # state its own US authorisation ("US citizen, currently in Vietnam"),
@@ -609,6 +645,18 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
             timezone_hint, us_evident = "PT", True
             break
         if m.group(2):
+            us_evident = True
+
+    # A two-letter code or "United States"/"USA"/"US" match above takes
+    # priority when both are present -- deterministic, and it's the more
+    # specific signal. Otherwise, fall back to a spelled-out state name: this
+    # is also what rescues a place like "Santa Fe, New Mexico" from the
+    # country-name endswith check above, since "New Mexico" ends in "Mexico"
+    # and nothing else in this function would otherwise recognise it as US.
+    if not us_evident:
+        sm = _US_STATE_NAME_RE.search(wide_scope)
+        if sm:
+            timezone_hint = _US_STATE_TIMEZONES[sm.group(1).lower()]
             us_evident = True
 
     if us_evident:

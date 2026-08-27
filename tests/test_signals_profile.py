@@ -485,3 +485,70 @@ def test_is_residence_evidence_rejects_prose_intent_and_domains():
         pd = [{"name": "Location", "value": value}]
         r = find_location("no address in cv", pd)
         assert r["non_us_explicit"] is False, f"{value!r} must NOT count as residence evidence"
+
+
+# --- Fix verification: spelled-out US state names must be recognised, and
+# --- a header domain/email must not supply residence evidence ------------
+#
+# _US_HINT_RE only recognised a two-letter code or "United States"/"USA"/
+# "US", so a spelled-out state ("Boston, Massachusetts") previously yielded
+# unknown location -- a real, unrelated gap. Closing it also fixes a sharper
+# bug for free: several genuine US places have names that literally END in a
+# listed country ("Santa Fe, New Mexico" ends in "Mexico"; the real US towns
+# "Mexico, Missouri", "Denmark, South Carolina", "China, Maine", "Norway,
+# Maine" and "Italy, Texas" all end in a listed country too), so the country
+# `endswith` check was eliminating them with nothing to cancel it -- a
+# two-letter code was absent and a spelled-out state name was, until this
+# fix, invisible to `_US_HINT_RE`. Recognising the state name supplies the
+# missing `us_evident=True`, and the existing `if us_evident: non_us = False`
+# rule cancels the false elimination for free.
+
+
+def test_us_state_name_recognised_with_timezone():
+    cases = [
+        ("Santa Fe, New Mexico", "MT"),
+        ("Boston, Massachusetts", "ET"),
+        ("Austin, Texas", "CT"),
+        ("Portland, Oregon", "PT"),
+        ("New York, New York", "ET"),
+    ]
+    for text, tz in cases:
+        r = find_location(text, [])
+        assert r["us_evident"] is True, f"{text!r}: expected us_evident=True"
+        assert r["non_us_explicit"] is False, f"{text!r}: expected non_us_explicit=False"
+        assert r["timezone_hint"] == tz, f"{text!r}: expected timezone_hint={tz}, got {r['timezone_hint']!r}"
+
+
+def test_us_towns_named_after_countries_are_not_eliminated():
+    # These are real US towns whose names happen to end in a listed country
+    # string. Before the state-name fix, each one was being eliminated by
+    # the country `endswith` check with nothing available to cancel it.
+    towns = [
+        "Mexico, Missouri",
+        "Denmark, South Carolina",
+        "China, Maine",
+        "Norway, Maine",
+        "Italy, Texas",
+    ]
+    for text in towns:
+        r = find_location(text, [])
+        assert r["non_us_explicit"] is False, f"{text!r} is a real US town, must not be eliminated"
+
+
+def test_genuine_non_us_addresses_still_eliminate_alongside_state_names():
+    # Sanity check: adding state-name recognition must not weaken genuine
+    # non-US detection.
+    for text in ["Hanoi, Vietnam", "Berlin, Germany", "Toronto, Canada", "Dublin, Ireland"]:
+        r = find_location(text, [])
+        assert r["non_us_explicit"] is True, f"{text!r} should still eliminate"
+        assert r["us_evident"] is False, f"{text!r} should not be read as a US state"
+
+
+def test_header_email_domain_does_not_supply_residence_evidence():
+    # Same bug class as the ATS-field path, closed for the CV contact
+    # header too: a domain or email is never a place. Without stripping it,
+    # a header line containing "jane.doe@vietnamsoftware.com" and no state
+    # code would set non_us_explicit purely from the email's domain.
+    md = "# Jane Doe\njane.doe@vietnamsoftware.com\n555-123-4567\n"
+    r = find_location(md, [])
+    assert r["non_us_explicit"] is False
