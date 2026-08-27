@@ -92,3 +92,20 @@ def test_contains_quote_ignores_whitespace_differences():
 
 def test_contains_quote_empty_quote_is_false():
     assert not contains_quote("anything", "")
+
+
+def test_jaccard_numeric_only_tokens_ignored():
+    # Pairs differing only in numeric tokens should score 1.0 because
+    # jaccard filters out purely-digit tokens before comparison.
+    assert jaccard("handled 40 million events", "handled 45 million events") == 1.0
+    assert jaccard("grew revenue 5 percent", "grew revenue 50 percent") == 1.0
+    assert jaccard("grew revenue 500 percent", "grew revenue 5000 percent") == 1.0
+
+
+def test_jaccard_magnitude_difference_boundary():
+    # Known limitation: magnitude differences (5 vs 50 engineers) are invisible.
+    # This is accepted because Task 4 applies a min_words=6 floor to intra-CV
+    # duplicate detection, which excludes short numeric-difference pairs while
+    # keeping longer sentence-template matches in scope. A future change to this
+    # behaviour should verify it does not weaken Task 4's duplicate-elimination.
+    assert jaccard("led team of 5 engineers", "led team of 50 engineers") == 1.0

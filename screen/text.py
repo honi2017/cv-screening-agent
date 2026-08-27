@@ -40,7 +40,17 @@ def bullet_hash(s: str) -> str:
 
 
 def jaccard(a: str, b: str) -> float:
-    """Token-set similarity of two strings after normalization."""
+    """Token-set similarity of two strings after normalization.
+
+    Purely numeric tokens are excluded from both sets before comparison.
+    This isolates the sentence structure as the signal, so "led team of 5 engineers"
+    and "led team of 50 engineers" will score as near-duplicates (1.0) because they
+    follow the same lazy-template pattern; the magnitude difference (5 vs 50) is blind.
+    Asymmetry: "4M" remains as "4m" after normalization and is NOT filtered (since
+    "4m".isdigit() is False); only pure-digit tokens like "40" disappear.
+    Callers must account for this when setting thresholds: this cannot distinguish
+    rounding from order-of-magnitude differences.
+    """
     ta = set(t for t in normalize(a).split() if not t.isdigit())
     tb = set(t for t in normalize(b).split() if not t.isdigit())
     if not ta or not tb:
