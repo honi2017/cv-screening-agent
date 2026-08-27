@@ -401,22 +401,50 @@ _WORK_AUTH_RE = re.compile(
 )
 
 
-_FIELD_WORD_RE = re.compile(r"[a-z0-9]+")
+# The candidate's residence drives gate G5, a hard elimination, so the location
+# field is identified by an EXACT label match — never by needle matching. Both
+# substring and whole-word matching were tried and both let unrelated fields
+# masquerade as the location: "Ethnicity" contains "city", "Relocation" contains
+# "location", and "Interview Location", "Office Location", "Previous Address" and
+# "Email Address" all contain a location word for a non-residence reason. Each
+# shadowed the real Location field and eliminated the candidate.
+#
+# An unrecognised label is the SAFE failure: it yields None, which falls back to
+# the CV contact header and then to unknown location — and unknown location
+# flags rather than eliminates. Widening this back into a needle match would
+# reverse that, so don't.
+_LOCATION_LABELS = frozenset({
+    "location", "current location", "candidate location", "location city state",
+    "city", "current city", "city town", "town",
+    "address", "home address", "mailing address", "street address",
+    "based in", "country", "current country",
+})
+_LABEL_NORM_RE = re.compile(r"[^a-z0-9]+")
+# A value containing an email or a URL is not a place, whatever its label says.
+_NOT_A_PLACE_RE = re.compile(r"@|://|\bhttps?\b")
 
 
-def _profile_value(profile_data: list[dict[str, Any]], *needles: str) -> str | None:
-    """Find an ATS custom field by name.
-
-    Field names are matched by WHOLE WORD, never substring: "city" is contained
-    in "Ethnicity" and "location" in "Relocation", and matching those would let
-    gate G5 eliminate a candidate on self-identified ethnicity, or on a
-    relocation-willingness field whose signal is the opposite. Both were
-    reproduced before this was tightened.
-    """
-    wanted = set(needles)
+def _profile_value(profile_data: list[dict[str, Any]]) -> str | None:
     for item in profile_data or []:
-        words = set(_FIELD_WORD_RE.findall(str(item.get("name", "")).lower()))
-        if words & wanted:
+        label = _LABEL_NORM_RE.sub(" ", str(item.get("name", "")).lower()).strip()
+        if label in _LOCATION_LABELS:
+            value = str(item.get("value", "")).strip()
+            if value and not _NOT_A_PLACE_RE.search(value):
+                return value
+    return None
+
+
+# LinkedIn gets the same exact-label treatment as location, for the same
+# reason (a needle like "linkedin" is safe here, but staying consistent
+# costs nothing) -- though a wrong match here only costs an -8pt penalty,
+# never an elimination, so it doesn't need the value guard above.
+_LINKEDIN_LABELS = frozenset({"linkedin", "linkedin profile", "linkedin url"})
+
+
+def _linkedin_profile_value(profile_data: list[dict[str, Any]]) -> str | None:
+    for item in profile_data or []:
+        label = _LABEL_NORM_RE.sub(" ", str(item.get("name", "")).lower()).strip()
+        if label in _LINKEDIN_LABELS:
             value = str(item.get("value", "")).strip()
             if value:
                 return value
@@ -455,7 +483,7 @@ def _slug_matches_name(slug: str, full_name: str) -> bool | None:
 def find_linkedin(
     markdown: str, profile_data: list[dict[str, Any]], full_name: str
 ) -> dict[str, Any]:
-    url = _profile_value(profile_data or [], "linkedin")
+    url = _linkedin_profile_value(profile_data or [])
     source = "trakstar" if url else "none"
 
     if not url:
@@ -494,7 +522,7 @@ def find_degree(markdown: str) -> dict[str, Any]:
 
 
 def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str, Any]:
-    raw = _profile_value(profile_data or [], "location", "city", "address")
+    raw = _profile_value(profile_data or [])
     lines = [l for l in (markdown or "").splitlines() if l.strip()]
     # Residence evidence only: the ATS location field, else the contact header.
     # A country named in the summary or body describes WORK, not residence — and

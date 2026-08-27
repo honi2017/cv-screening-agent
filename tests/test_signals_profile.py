@@ -240,18 +240,30 @@ def test_us_hint_requires_city_comma_state_shape():
         assert r[key] == expected, f"{text!r}: expected {key}={expected}, got {r[key]!r}"
 
 
-# --- Fix verification: ATS field-name matching must be whole-word ---------
+# --- Fix verification: ATS field-name matching must be an exact allowlist -
 #
-# Substring matching on ATS field names let gate G5 eliminate on protected-
-# class data: "city" is contained in "Ethnicity" and "location" is contained
-# in "Relocation" (Preference). The former means a candidate's self-reported
-# ethnicity could silently become their "location" and trigger G5 -- the
-# spec explicitly forbids weighing nationality or ethnicity anywhere, and
-# this bypassed that in the deterministic layer entirely. The latter shadows
-# a field whose whole purpose is a *positive* signal with an unrelated one,
-# and can flip a "yes, willing" answer into an elimination. Whole-word
-# matching is what prevents both -- if a future change reverts `_profile_value`
-# to substring containment ("if n in name"), these collisions reopen.
+# The candidate's residence drives gate G5, a hard elimination, so the
+# location field is identified by an EXACT label match -- never by needle
+# matching. Both substring and whole-word matching were tried in turn and
+# both let unrelated fields masquerade as the location: substring matching
+# let "city" match inside "Ethnicity" and "location" match inside
+# "Relocation" (Preference); whole-word matching narrowed that but still let
+# "Interview Location", "Office Location", "Previous Address", and "Email
+# Address" match, because each one legitimately CONTAINS a location word for
+# a reason that has nothing to do with the candidate's residence. The
+# Ethnicity case is the most serious: the spec explicitly forbids weighing
+# nationality or ethnicity anywhere, and matching that field bypassed that
+# in the deterministic layer entirely. The Email Address case is the
+# clearest sign a name-matching approach was structurally wrong: an email
+# domain being read as a country of residence. Each of these silently
+# shadowed a co-present real `Location` field and eliminated the candidate.
+#
+# An unrecognised label is the SAFE failure: `_profile_value` returns None,
+# which falls back to the CV's contact header and then to unknown location
+# -- and unknown location flags rather than eliminates. If a future change
+# widens `_LOCATION_LABELS` matching back into a needle or substring check
+# to "catch more label phrasings", it reopens every one of these bugs --
+# don't.
 
 
 def test_profile_value_ignores_ethnicity_field_uses_real_location():
@@ -292,6 +304,70 @@ def test_profile_value_whole_word_still_resolves_genuine_field_variants():
         find_location("no address", [{"name": "Home Address", "value": "123 Main St, Boston, MA"}])["raw"]
         == "123 Main St, Boston, MA"
     )
+
+
+def test_profile_value_ignores_interview_location_field_uses_real_location():
+    pd = [
+        {"name": "Interview Location", "value": "Remote - Hanoi, Vietnam office"},
+        {"name": "Location", "value": "Boston, MA"},
+    ]
+    r = find_location("no address in cv", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Boston, MA"
+
+
+def test_profile_value_ignores_office_location_field_uses_real_location():
+    pd = [
+        {"name": "Office Location", "value": "Singapore"},
+        {"name": "Location", "value": "Boston, MA"},
+    ]
+    r = find_location("no address", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Boston, MA"
+
+
+def test_profile_value_ignores_previous_address_field_uses_real_location():
+    pd = [
+        {"name": "Previous Address", "value": "Hanoi, Vietnam"},
+        {"name": "Location", "value": "Boston, MA"},
+    ]
+    r = find_location("no address", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Boston, MA"
+
+
+def test_profile_value_ignores_email_address_field_uses_real_location():
+    # The clearest sign the needle/whole-word approach was structurally
+    # wrong: an email domain read as a country of residence.
+    pd = [
+        {"name": "Email Address", "value": "jane@vietnamsoftware.com"},
+        {"name": "Location", "value": "Boston, MA"},
+    ]
+    r = find_location("no address", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Boston, MA"
+
+
+def test_profile_value_allowlist_recognises_common_label_variants():
+    # Pinning the allowlist as not over-tight: these common label phrasings
+    # must still resolve to the real location value.
+    assert (
+        find_location("no address", [{"name": "Location (City, State)", "value": "Austin, TX"}])["raw"]
+        == "Austin, TX"
+    )
+    assert find_location("no address", [{"name": "City/Town", "value": "Chicago, IL"}])["raw"] == "Chicago, IL"
+    assert find_location("no address", [{"name": "Country", "value": "Vietnam"}])["raw"] == "Vietnam"
+
+
+def test_profile_value_unrecognised_label_degrades_to_unknown_not_elimination():
+    # An unrecognised label is the SAFE failure: the field is ignored
+    # entirely (even though its value looks like a plausible location),
+    # `raw` falls back to the CV's contact header, and an unrecognised
+    # location degrades to "unknown" -- which flags, never eliminates.
+    pd = [{"name": "Where are you based?", "value": "Boston, MA"}]
+    r = find_location("no address in cv", pd)
+    assert r["raw"] is None
+    assert r["non_us_explicit"] is False
 
 
 # --- Fix verification: bare "US"/"U.S."/"U.S.A." must be recognised -------
