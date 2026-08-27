@@ -382,7 +382,8 @@ _MT_STATES = frozenset("MT WY CO NM UT ID AZ".split())
 _PT_STATES = frozenset("WA OR CA NV AK HI".split())
 
 _US_HINT_RE = re.compile(
-    r",\s*([A-Z]{2})\b(?:\s+\d{5})?|\b(United States|USA|U\.S\.A?\.)\b"
+    r",\s*([A-Z]{2})\b(?:\s+\d{5})?"
+    r"|\b(United States|USA|U\.S\.A\.?|U\.S\.?|US)(?!\w)"
 )
 
 _NON_US_COUNTRIES = (
@@ -400,10 +401,22 @@ _WORK_AUTH_RE = re.compile(
 )
 
 
+_FIELD_WORD_RE = re.compile(r"[a-z0-9]+")
+
+
 def _profile_value(profile_data: list[dict[str, Any]], *needles: str) -> str | None:
+    """Find an ATS custom field by name.
+
+    Field names are matched by WHOLE WORD, never substring: "city" is contained
+    in "Ethnicity" and "location" in "Relocation", and matching those would let
+    gate G5 eliminate a candidate on self-identified ethnicity, or on a
+    relocation-willingness field whose signal is the opposite. Both were
+    reproduced before this was tightened.
+    """
+    wanted = set(needles)
     for item in profile_data or []:
-        name = str(item.get("name", "")).lower()
-        if any(n in name for n in needles):
+        words = set(_FIELD_WORD_RE.findall(str(item.get("name", "")).lower()))
+        if words & wanted:
             value = str(item.get("value", "")).strip()
             if value:
                 return value

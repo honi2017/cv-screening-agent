@@ -238,3 +238,108 @@ def test_us_hint_requires_city_comma_state_shape():
     for text, key, expected in cases:
         r = find_location(text, [])
         assert r[key] == expected, f"{text!r}: expected {key}={expected}, got {r[key]!r}"
+
+
+# --- Fix verification: ATS field-name matching must be whole-word ---------
+#
+# Substring matching on ATS field names let gate G5 eliminate on protected-
+# class data: "city" is contained in "Ethnicity" and "location" is contained
+# in "Relocation" (Preference). The former means a candidate's self-reported
+# ethnicity could silently become their "location" and trigger G5 -- the
+# spec explicitly forbids weighing nationality or ethnicity anywhere, and
+# this bypassed that in the deterministic layer entirely. The latter shadows
+# a field whose whole purpose is a *positive* signal with an unrelated one,
+# and can flip a "yes, willing" answer into an elimination. Whole-word
+# matching is what prevents both -- if a future change reverts `_profile_value`
+# to substring containment ("if n in name"), these collisions reopen.
+
+
+def test_profile_value_ignores_ethnicity_field_uses_real_location():
+    pd = [
+        {"name": "Ethnicity", "value": "Vietnamese American"},
+        {"name": "Location", "value": "Boston, MA"},
+    ]
+    r = find_location("no address in cv", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Boston, MA"
+
+
+def test_profile_value_ignores_relocation_preference_field_uses_real_location():
+    pd = [
+        {"name": "Relocation Preference", "value": "Open to Singapore office"},
+        {"name": "Location", "value": "Austin, TX"},
+    ]
+    r = find_location("no address", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Austin, TX"
+
+
+def test_profile_value_ignores_nationality_field_uses_real_location():
+    pd = [
+        {"name": "Nationality", "value": "Vietnamese"},
+        {"name": "Location", "value": "Chicago, IL"},
+    ]
+    r = find_location("no address", pd)
+    assert r["non_us_explicit"] is False
+    assert r["raw"] == "Chicago, IL"
+
+
+def test_profile_value_whole_word_still_resolves_genuine_field_variants():
+    # Pinning the change as not over-tightened: real location-ish field names
+    # must still resolve.
+    assert find_location("no address", [{"name": "Current City", "value": "Denver, CO"}])["raw"] == "Denver, CO"
+    assert (
+        find_location("no address", [{"name": "Home Address", "value": "123 Main St, Boston, MA"}])["raw"]
+        == "123 Main St, Boston, MA"
+    )
+
+
+# --- Fix verification: bare "US"/"U.S."/"U.S.A." must be recognised -------
+#
+# A dual national who writes "Citizen of the US and Ireland" was eliminated
+# while the identical sentence spelled "United States" was safe -- a wording
+# accident, not a real residence signal. Case sensitivity is deliberate: the
+# pattern must not match the lowercase pronoun "us" ("joined us in 2019").
+
+
+def test_us_hint_recognises_bare_us_abbreviation_dual_national_safe():
+    r = find_location("Citizen of the US and Ireland", [])
+    assert r["us_evident"] is True
+    assert r["non_us_explicit"] is False
+
+
+def test_us_hint_does_not_match_lowercase_pronoun_us():
+    assert find_location("joined us in 2019", [])["us_evident"] is False
+    assert find_location("USB debugging experience", [])["us_evident"] is False
+
+
+# --- Declined finding, pinned as a known, deliberately-left false positive -
+#
+# find_degree credits an MSc for the bare word "master", so "Certified Scrum
+# Master" or "Master Service Agreements" can register as a master's degree.
+# Left deliberately: find_degree scopes to the Education section when one
+# exists, so a realistic CV with a real Education section is not fooled by
+# "Scrum Master" appearing elsewhere in the document; the false positive only
+# reaches a CV with no detectable Education section at all. The failure
+# direction is lenient (wrongly *crediting* a degree, so no -5 penalty lands
+# on anyone), and tightening the "master" match to require "master's"/"master
+# of X" would produce the harmful inverse: "Master, Computer Science, 2016"
+# would lose its real degree and take the penalty. This test pins the safe
+# case so nobody "fixes" this deliberate trade-off without re-litigating it.
+
+
+def test_find_degree_scrum_master_does_not_shadow_real_education_section():
+    md = """# Jane Doe
+
+## Summary
+Certified Scrum Master with a track record of shipping on time.
+
+## Education
+BSc Computer Science, State University, 2016
+
+## Experience
+- Certified Scrum Master, led agile ceremonies
+- Negotiated Master Service Agreements with vendors
+"""
+    r = find_degree(md)
+    assert r["level"] == "BSc"
