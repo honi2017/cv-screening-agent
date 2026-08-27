@@ -142,6 +142,30 @@ def _write_hidden_text_pdf(path: Path) -> Path:
     return path
 
 
+def _write_invisible_text_pdf(path: Path) -> Path:
+    """A visually normal CV with one span drawn in the invisible text render
+    mode (PDF Tr 3) — the third hidden-text kind, distinct from white-on-white
+    and micro-font.
+    """
+    doc = pymupdf.open()
+    page = doc.new_page()
+    page.insert_textbox(
+        pymupdf.Rect(50, 50, 545, 600), CLEAN, fontsize=9, fontname="helv"
+    )
+    page.insert_text(
+        (50, 700),
+        "invisible render mode stuffed keywords fintech saml sftp",
+        fontsize=9,
+        fontname="helv",
+        color=(0, 0, 0),
+        render_mode=3,
+    )
+    doc.set_metadata({"producer": "TestSuite", "creator": "TestSuite"})
+    doc.save(path)
+    doc.close()
+    return path
+
+
 def _write_scanned_pdf(path: Path) -> Path:
     """A page with no extractable text, standing in for a scanned CV."""
     doc = pymupdf.open()
@@ -162,6 +186,7 @@ def build_all(out_dir: Path) -> dict[str, Path]:
         "template_b": _write_text_pdf(out_dir / "template_b.pdf", TEMPLATE_B),
         "four_year": _write_text_pdf(out_dir / "four_year.pdf", FOUR_YEAR),
         "hidden_text": _write_hidden_text_pdf(out_dir / "hidden_text.pdf"),
+        "invisible_text": _write_invisible_text_pdf(out_dir / "invisible_text.pdf"),
         "scanned": _write_scanned_pdf(out_dir / "scanned.pdf"),
     }
 

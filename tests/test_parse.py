@@ -43,6 +43,13 @@ def test_hidden_text_detected_for_white_and_micro_font(pdfs):
     assert "micro_font" in kinds
 
 
+def test_hidden_text_detected_for_invisible_render_mode(pdfs):
+    p = parse_pdf(pdfs["invisible_text"])
+    assert p.hidden_text["found"] is True
+    kinds = {s["kind"] for s in p.hidden_text["spans"]}
+    assert "invisible_render_mode" in kinds
+
+
 def test_clean_cv_has_no_hidden_text(pdfs):
     p = parse_pdf(pdfs["clean"])
     assert p.hidden_text["found"] is False

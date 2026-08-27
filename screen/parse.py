@@ -4,7 +4,9 @@ document metadata and text that was never meant to be seen.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +47,26 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: fh.read(65536), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+@contextlib.contextmanager
+def _suppressed_pymupdf_messages():
+    """Silence pymupdf4llm's internal OCR-engine probe (e.g. "Using
+    Tesseract for OCR processing."), which writes through pymupdf.message()
+    regardless of show_progress. That stream is bound directly to sys.stdout
+    at import time — not looked up dynamically — so contextlib.redirect_stdout
+    has no effect on it; only PyMuPDF's own pymupdf.set_messages() API can
+    redirect it. This is noise, not an error signal: PyMuPDF reports real
+    failures by raising, not printing, so redirecting here loses no error
+    information. Restores the previous destination on exit, so this only
+    affects the wrapped call. Do not remove.
+    """
+    previous = pymupdf._g_out_message
+    pymupdf.set_messages(stream=io.StringIO())
+    try:
+        yield
+    finally:
+        pymupdf.set_messages(stream=previous)
 
 
 def _luminance(color_int: int) -> float:
@@ -101,7 +123,8 @@ def _hidden_spans(doc: pymupdf.Document) -> list[dict[str, Any]]:
 def parse_pdf(pdf_path: Path) -> ParsedPdf:
     doc = pymupdf.open(pdf_path)
     try:
-        markdown = pymupdf4llm.to_markdown(doc, show_progress=False)
+        with _suppressed_pymupdf_messages():
+            markdown = pymupdf4llm.to_markdown(doc, show_progress=False)
         raw_meta = doc.metadata or {}
         meta = {
             "producer": (raw_meta.get("producer") or "").strip(),
