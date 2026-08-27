@@ -103,6 +103,30 @@ Python, Stripe, NetSuite, SFTP
 """
 
 
+HIDDEN_TEXT_BASE = """Casey Hidden
+casey.hidden@example.com | +1 617 555 0199 | Boston, MA
+linkedin.com/in/caseyhidden
+
+EXPERIENCE
+
+Forward Deployed Engineer, Meridian Fintech (2018-04 - Present)
+- Delivered custom data-integration pipelines for 25 investment-firm clients, combining SFTP drops, REST APIs, and nightly batch loads into a single ingestion layer processing 9M records/day.
+- Ran discovery sessions with hedge fund operations teams to map their CRM and subscription-document workflows before proposing integration designs.
+- Implemented SAML and OIDC single sign-on for 14 enterprise clients, cutting provisioning time from 4 weeks to 5 days.
+- Turned a bespoke DealCloud sync built for one client into a reusable connector adopted by 16 other tenants.
+
+Software Engineer, Ledgerline Systems (2014-09 - 2018-03)
+- Built the MySQL to Redshift replication pipeline powering the finance reporting suite.
+- Operated the SMTP relay for transactional billing mail, cutting the bounce rate from 3.8% to 0.5%.
+
+EDUCATION
+BSc Computer Science, State University
+
+SKILLS
+Python, Java, MySQL, Redshift, SFTP, SAML, OIDC, DealCloud, Terraform, AWS
+"""
+
+
 def _write_text_pdf(path: Path, body: str) -> Path:
     doc = pymupdf.open()
     page = doc.new_page()
@@ -116,11 +140,21 @@ def _write_text_pdf(path: Path, body: str) -> Path:
 
 
 def _write_hidden_text_pdf(path: Path) -> Path:
-    """A visually normal CV with white-on-white and 2pt keyword stuffing."""
+    """A visually normal, strong CV with white-on-white and 2pt keyword stuffing.
+
+    Deliberately NOT built from CLEAN's text: the two are combined in the same
+    applicant pool in the end-to-end test, and CLEAN's bullets are long and
+    specific enough (>=6 words) that reusing them verbatim here would trip the
+    cross-pool duplicate-bullet gate (screen.pool) against the "clean"
+    candidate too -- a fixture-authoring accident, not a real shared-template
+    signal. HIDDEN_TEXT_BASE is an equally strong but independently written
+    CV so the only thing that should eliminate this candidate is the hidden
+    text itself (gate G3).
+    """
     doc = pymupdf.open()
     page = doc.new_page()
     page.insert_textbox(
-        pymupdf.Rect(50, 50, 545, 600), CLEAN, fontsize=9, fontname="helv"
+        pymupdf.Rect(50, 50, 545, 600), HIDDEN_TEXT_BASE, fontsize=9, fontname="helv"
     )
     # White text on the default white background.
     page.insert_text(
