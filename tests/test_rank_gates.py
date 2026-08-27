@@ -110,8 +110,17 @@ def test_metadata_signal_counts_half_and_cannot_gate_alone():
 
 
 def test_skills_count_contributes_a_tier2_signal():
-    pc = precheck(skills_count=45)
+    # Read the threshold from config rather than hardcoding it, so the number
+    # lives in one place (role.json) and this test tracks calibration changes.
+    threshold = int(CFG.gates["skills_count_threshold"])
+    pc = precheck(skills_count=threshold)
     assert tier2_count(pc, verdict(), CFG) >= 1
+
+
+def test_skills_count_below_threshold_does_not_contribute_signal():
+    threshold = int(CFG.gates["skills_count_threshold"])
+    pc = precheck(skills_count=threshold - 1)
+    assert tier2_count(pc, verdict(), CFG) == 0
 
 
 def test_g3_hidden_text():

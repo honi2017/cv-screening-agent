@@ -1,6 +1,6 @@
 {
   "position_title": "Forward Deployed Engineer, Engineering",
-  "rubric_version": 1,
+  "rubric_version": 2,
   "precheck_rules_version": 2,
   "cap_fraction": 0.20,
   "quality_floor_delta": 5,
@@ -28,7 +28,7 @@
     "degree_required": false,
     "intra_dup_jaccard": 0.85,
     "pool_dup_tier1_count": 4,
-    "skills_count_threshold": 40,
+    "skills_count_threshold": 80,
     "metadata_template_producers": [
       "canva", "resume.io", "zety", "kickresume", "novoresume", "enhancv", "flowcv"
     ],
