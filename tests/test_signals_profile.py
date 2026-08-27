@@ -419,3 +419,69 @@ BSc Computer Science, State University, 2016
 """
     r = find_degree(md)
     assert r["level"] == "BSc"
+
+
+# --- Fix verification: an ATS Location value must be SHAPED like a place --
+#
+# The exact-label allowlist (above) closed every case of the WRONG field
+# being read as a location. It did not close the case of the RIGHT field
+# holding the wrong kind of value: gate G5 is a hard elimination, and a
+# correctly-labelled `Location` field was still eliminating candidates
+# whose value was free text ("Interested in opportunities across Singapore
+# and Vietnam"), an explicit relocation OFFER ("Willing to relocate to our
+# Singapore office" -- the giveaway that a bare substring scan for a country
+# name, or even for the word "relocate", cannot tell a statement of intent
+# from a statement of residence), or a bare domain being read as a country
+# ("vietnamsoftware.com"). `_is_residence_evidence` requires the value to
+# end with the place in a short trailing component, the way a real address
+# does, and rejects intent language and domains outright. If a future
+# change reverts `find_location`'s ATS-field path to a bare substring scan
+# for a country name (the same pattern this replaced twice already), all of
+# these reopen.
+
+
+def test_is_residence_evidence_recognises_real_addresses():
+    # These must all continue to set non_us_explicit=True: genuine
+    # residence-shaped values, in various forms this rule must keep passing.
+    residence_values = [
+        "Hanoi, Vietnam",
+        "Vietnam",
+        "Ho Chi Minh City, Vietnam",
+        "Bangalore, India",
+        "Berlin, Germany",
+        "London, United Kingdom",
+        "Toronto, Canada",
+        "Dublin, Ireland",
+        "Vietnam.",
+        "Da Nang City, Viet Nam",
+    ]
+    for value in residence_values:
+        pd = [{"name": "Location", "value": value}]
+        r = find_location("no address in cv", pd)
+        assert r["non_us_explicit"] is True, f"{value!r} should count as residence evidence"
+
+
+def test_is_residence_evidence_rejects_prose_intent_and_domains():
+    # None of these may ever set non_us_explicit=True, even though most
+    # contain a non-US country name or the word "relocate": prose about
+    # offshore work, an explicit relocation OFFER, a bare domain, an email
+    # address, and genuine US addresses (sanity check: the rule must not
+    # start rejecting real US "City, ST" values either).
+    non_residence_values = [
+        "Interested in opportunities across Singapore and Vietnam",
+        "Willing to relocate to our Singapore office",
+        "vietnamsoftware.com",
+        "jane@vietnamsoftware.com",
+        "Boston, MA",
+        "Austin, TX",
+        "Chicago, IL",
+        "Remote - Hanoi, Vietnam office",
+        "Open to Singapore",
+        "US citizen currently in Germany",
+        "Seeking roles in Germany",
+        "Worked extensively with teams in India and Vietnam",
+    ]
+    for value in non_residence_values:
+        pd = [{"name": "Location", "value": value}]
+        r = find_location("no address in cv", pd)
+        assert r["non_us_explicit"] is False, f"{value!r} must NOT count as residence evidence"

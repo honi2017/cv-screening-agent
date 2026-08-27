@@ -386,8 +386,16 @@ _US_HINT_RE = re.compile(
     r"|\b(United States|USA|U\.S\.A\.?|U\.S\.?|US)(?!\w)"
 )
 
+# "viet nam" is ordered before "vietnam" and "united kingdom" stays ahead of
+# any of its own substrings: `_is_residence_evidence` below matches a value
+# against this tuple with `endswith`, which is order-independent for `any()`
+# as things stand today, but if this ever grows an entry that IS a genuine
+# substring of another (e.g. a short alias), checking the longer/more
+# specific spelling first is what keeps a future rewrite (e.g. reporting
+# WHICH country matched, not just whether one did) from picking a truncated
+# form. Costs nothing to order defensively now.
 _NON_US_COUNTRIES = (
-    "vietnam", "viet nam", "india", "canada", "united kingdom", "england", "germany",
+    "viet nam", "vietnam", "india", "united kingdom", "canada", "england", "germany",
     "france", "singapore", "australia", "brazil", "mexico", "philippines", "poland",
     "ukraine", "nigeria", "pakistan", "bangladesh", "china", "japan", "korea",
     "netherlands", "spain", "italy", "ireland", "sweden", "norway", "denmark",
@@ -416,12 +424,14 @@ _WORK_AUTH_RE = re.compile(
 _LOCATION_LABELS = frozenset({
     "location", "current location", "candidate location", "location city state",
     "city", "current city", "city town", "town",
-    "address", "home address", "mailing address", "street address",
-    "based in", "country", "current country",
+    "address", "home address", "mailing address", "street address", "current address",
+    "based in", "country", "current country", "state province",
 })
 _LABEL_NORM_RE = re.compile(r"[^a-z0-9]+")
-# A value containing an email or a URL is not a place, whatever its label says.
-_NOT_A_PLACE_RE = re.compile(r"@|://|\bhttps?\b")
+# A bare domain is not a place, whatever the field label says.
+_NOT_A_PLACE_RE = re.compile(
+    r"@|://|\bhttps?\b|\b[a-z0-9-]+\.(?:com|net|org|io|co|dev|ai|vn|uk|de)\b", re.I
+)
 
 
 def _profile_value(profile_data: list[dict[str, Any]]) -> str | None:
@@ -432,6 +442,34 @@ def _profile_value(profile_data: list[dict[str, Any]]) -> str | None:
             if value and not _NOT_A_PLACE_RE.search(value):
                 return value
     return None
+
+
+# Words signalling intent or preference rather than current residence.
+_INTENT_RE = re.compile(
+    r"\b(?:open|willing|interested|available|relocat\w*|prefer\w*|seeking|looking|remote|office)\b",
+    re.I,
+)
+
+
+def _is_residence_evidence(value: str) -> bool:
+    """True when `value` reads like an address rather than prose about a place.
+
+    `non_us_explicit` drives gate G5, a hard elimination, and was previously set
+    by a bare substring scan for a country name. That eliminated candidates whose
+    location field held free text ("Interested in opportunities across Singapore
+    and Vietnam") or even an explicit relocation offer ("Willing to relocate to
+    our Singapore office"), and read an email domain as a country of residence.
+    A real address ends with the place, in a short trailing component: "Hanoi,
+    Vietnam", "Ho Chi Minh City, Vietnam", "London, United Kingdom", "Vietnam".
+    Prose does not.
+    """
+    if not value or _NOT_A_PLACE_RE.search(value) or _INTENT_RE.search(value):
+        return False
+    normalised = value.strip().rstrip(".").lower()
+    tail = normalised.split(",")[-1].strip()
+    if len(tail.split()) > 3:
+        return False
+    return any(normalised.endswith(country) for country in _NON_US_COUNTRIES)
 
 
 # LinkedIn gets the same exact-label treatment as location, for the same
@@ -530,12 +568,27 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
     # eliminated exactly the candidates the JD most wants. Verified: a US-based
     # candidate whose summary reads "clients across Vietnam and Singapore" was
     # being marked non_us_explicit and eliminated by gate G5.
-    residence_scope = raw if raw else "\n".join(lines[:3])
     wide_scope = raw if raw else "\n".join(lines[:12])
 
-    lowered = residence_scope.lower()
-    non_us = any(c in lowered for c in _NON_US_COUNTRIES)
-    if non_us and _WORK_AUTH_RE.search(markdown or ""):
+    if raw:
+        # The ATS field is free text, not necessarily an address. A bare
+        # substring scan over it eliminated candidates whose location field
+        # held prose ("Interested in opportunities across Singapore and
+        # Vietnam"), an explicit relocation OFFER ("Willing to relocate to
+        # our Singapore office"), or even an email domain -- see
+        # _is_residence_evidence for the shape check that replaced it.
+        non_us = _is_residence_evidence(raw)
+    else:
+        # A CV contact-header line is an address by convention, so the
+        # cheaper substring scan over just the first 3 non-empty lines is
+        # fine here (and is what test_find_location_non_us_explicit relies
+        # on for a bare "Hanoi, Vietnam" with no ATS data at all).
+        non_us = any(c in "\n".join(lines[:3]).lower() for c in _NON_US_COUNTRIES)
+
+    # Check both the CV body AND the ATS value itself: a location field can
+    # state its own US authorisation ("US citizen, currently in Vietnam"),
+    # and that must cancel the gate exactly like a work-auth line in the CV.
+    if non_us and (_WORK_AUTH_RE.search(markdown or "") or _WORK_AUTH_RE.search(raw or "")):
         # Says they are abroad but also authorised or relocating: not a gate.
         non_us = False
 
