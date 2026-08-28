@@ -740,22 +740,91 @@ def _slug_matches_name(slug: str, full_name: str) -> bool | None:
     return None
 
 
+# A slug that _LINKEDIN_RE technically captures but that is obviously a
+# template placeholder rather than anyone's real vanity handle -- "linkedin.com
+# /in/your-name" is not a profile any more than "no" is. Kept short and
+# generic on purpose: this is a backstop against unfilled-template slugs, not
+# an attempt to guess every bad slug a human might type.
+_PLACEHOLDER_SLUGS = frozenset({
+    "yourname", "your-name", "yourprofile", "your-profile", "username",
+    "profile", "linkedin", "url", "link", "na", "n-a", "none", "tbd",
+    "placeholder", "example", "firstname-lastname",
+})
+
+
+def _extract_linkedin_profile(value: str | None) -> tuple[str, str] | None:
+    """(matched substring, slug) for the first real profile path inside
+    `value`, or None when it contains no such path.
+
+    Uses `re.search`, deliberately not a whole-string parse: a genuine
+    profile identifier is sometimes embedded inside an unrelated wrapper --
+    e.g. a mangled paste of a confirmation-page redirect,
+    "https://example.com/confirmation//www.linkedin.com/in/<slug>" -- where
+    the profile path is real even though the surrounding string is not
+    itself a valid URL. Searching, rather than requiring the whole value to
+    parse as a URL, extracts that embedded identifier instead of discarding
+    the whole string.
+
+    A match whose slug is empty, shorter than LinkedIn's own 3-character
+    minimum for a public-profile slug, or one of the known placeholder
+    tokens (see `_PLACEHOLDER_SLUGS`) does not count -- that is template
+    text (or, measured in the real data, someone typing "n/a" into the
+    LinkedIn field: "https://www.linkedin.com/in/n/a" captures a slug of
+    just "n", since "/" ends the slug character class), not a profile
+    identifier.
+    """
+    if not value:
+        return None
+    m = _LINKEDIN_RE.search(value)
+    if not m:
+        return None
+    slug = m.group(1)
+    if not slug or len(slug) < 3 or slug.lower().strip("-_") in _PLACEHOLDER_SLUGS:
+        return None
+    return m.group(0), slug
+
+
 def find_linkedin(
     markdown: str, profile_data: list[dict[str, Any]], full_name: str
 ) -> dict[str, Any]:
-    url = _linkedin_profile_value(profile_data or [])
-    source = "trakstar" if url else "none"
+    """Whether the candidate supplied something shaped like a LinkedIn
+    profile URL, in the Trakstar ATS field or the CV text.
 
-    if not url:
-        m = _LINKEDIN_RE.search(markdown or "")
-        if m:
-            url, source = m.group(0), "cv"
+    What this validates -- and what it deliberately does NOT: this checks
+    the SHAPE of the value only, i.e. does it contain a real profile path,
+    `linkedin.com/in/<slug>` or `linkedin.com/pub/<slug>`, with a non-empty
+    slug that isn't itself an unfilled placeholder ("your-name", etc.)? It
+    does NOT verify that the profile actually EXISTS, and it never will:
+    this pipeline never fetches LinkedIn, because LinkedIn blocks automated
+    access, so confirming existence would require scraping, which this
+    project will not do. A syntactically well-formed but entirely invented
+    URL -- a fabricated slug that merely looks plausible -- passes this
+    check and comes back `present: True`. Nothing downstream should read
+    `present: True` as "the profile was confirmed to exist"; it means only
+    "the value supplied looks like a profile URL."
 
-    if not url:
+    Measured against the real applicant pool: a plain non-empty ATS field
+    value ("N/A", "n/a", "NA", "no", "ok", the bare site "www.linkedin.com")
+    is NOT a profile and must come back absent -- `present: False`,
+    `source: "none"`, `url: None`, `name_matches: None` -- so the -8 "no
+    LinkedIn" penalty and the `no LinkedIn` flag apply. Only a value that
+    contains a real profile path counts as present; the CV-text fallback is
+    validated through the exact same check, via `_extract_linkedin_profile`,
+    so the two paths cannot disagree on what counts as a profile.
+    """
+    raw = _linkedin_profile_value(profile_data or [])
+    extracted = _extract_linkedin_profile(raw)
+    source = "trakstar" if extracted else "none"
+
+    if not extracted:
+        extracted = _extract_linkedin_profile(markdown or "")
+        if extracted:
+            source = "cv"
+
+    if not extracted:
         return {"present": False, "source": "none", "url": None, "name_matches": None}
 
-    m = _LINKEDIN_RE.search(url)
-    slug = m.group(1) if m else ""
+    url, slug = extracted
     return {
         "present": True,
         "source": source,

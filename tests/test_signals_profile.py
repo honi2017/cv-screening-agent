@@ -36,6 +36,96 @@ def test_find_linkedin_name_unknown_for_opaque_slug():
     assert r["name_matches"] is None
 
 
+# --- Fix 1: a non-URL ATS value must not count as "has a LinkedIn profile" -
+#
+# Measured across the real applicant pool, 15 of 66 candidates had a
+# non-empty ATS LinkedIn field that was not actually a profile URL --
+# "N/A"/"n/a"/"NA", "no", "ok", or the bare site with no profile path -- and
+# were wrongly recorded present=True, so the -8 "no LinkedIn" penalty never
+# applied. A value only counts as a profile if it contains a real
+# `linkedin.com/in/<slug>` or `linkedin.com/pub/<slug>` path with a
+# non-placeholder slug; everything else is absent.
+
+
+@pytest.mark.parametrize(
+    "value",
+    ["N/A", "n/a", "NA", "no", "ok", "", "www.linkedin.com", "https://www.linkedin.com/"],
+)
+def test_find_linkedin_non_profile_ats_values_are_absent(value):
+    pd = [{"name": "LinkedIn", "value": value}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is False
+    assert r["source"] == "none"
+    assert r["url"] is None
+    assert r["name_matches"] is None
+
+
+def test_find_linkedin_well_formed_profile_url_still_present():
+    pd = [{"name": "LinkedIn", "value": "https://www.linkedin.com/in/alex-morgan-99/"}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["source"] == "trakstar"
+
+
+def test_find_linkedin_well_formed_pub_profile_url_still_present():
+    pd = [{"name": "LinkedIn", "value": "https://linkedin.com/pub/alex-morgan/1/2/3"}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["source"] == "trakstar"
+
+
+def test_find_linkedin_extracts_profile_embedded_in_redirect_wrapper():
+    # Invented shape (no real candidate data) matching a real mangled-paste
+    # case: a genuine profile path embedded inside an unrelated redirect
+    # URL. The profile identifier is genuinely there and must be extracted,
+    # not rejected because the surrounding string isn't a valid URL.
+    pd = [
+        {
+            "name": "LinkedIn",
+            "value": "https://example.com/confirmation//www.linkedin.com/in/jane-doe-42",
+        }
+    ]
+    r = find_linkedin("no profile in cv body", pd, "Jane Doe")
+    assert r["present"] is True
+    assert r["source"] == "trakstar"
+    assert r["url"] == "www.linkedin.com/in/jane-doe-42"
+    assert r["name_matches"] is True
+
+
+def test_find_linkedin_placeholder_slug_is_absent():
+    pd = [{"name": "LinkedIn", "value": "https://linkedin.com/in/your-name"}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is False
+
+
+def test_find_linkedin_slash_separated_na_in_url_path_is_absent():
+    # Measured real shape: someone typed "n/a" into the LinkedIn field, and
+    # the trailing "/a" falls outside the slug character class, so a naive
+    # extraction captures only "n" as the slug. A 1-character slug is below
+    # LinkedIn's own 3-character minimum for a public-profile handle, so
+    # this must still come back absent, not a fabricated 1-letter profile.
+    pd = [{"name": "LinkedIn", "value": "https://www.linkedin.com/in/n/a"}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is False
+
+
+def test_find_linkedin_cv_text_non_profile_value_is_absent():
+    # The CV-text path is validated through the exact same check as the ATS
+    # field -- the bare site with no profile path is not a profile there
+    # either.
+    r = find_linkedin("Find me at www.linkedin.com for details.", [], "Alex Morgan")
+    assert r["present"] is False
+    assert r["source"] == "none"
+
+
+def test_find_linkedin_cv_text_extracts_profile_embedded_in_redirect_wrapper():
+    md = "Reach out via https://example.com/confirmation//www.linkedin.com/in/jane-doe-42"
+    r = find_linkedin(md, [], "Jane Doe")
+    assert r["present"] is True
+    assert r["source"] == "cv"
+    assert r["url"] == "www.linkedin.com/in/jane-doe-42"
+
+
 def test_find_degree_detects_level_and_field():
     md = "## Education\nBSc Computer Science, State University\n"
     r = find_degree(md)
