@@ -325,6 +325,56 @@ def test_assess_records_flag_chips_for_report():
     assert a.timezone_hint == "unknown"
 
 
+# --- Fix 2: "claims every criterion" flag (deterministic, report-only) -----
+#
+# See the comment in screen.rank.assess for why this is a flag rather than a
+# penalty: the same signal, tried earlier as a penalty on ordinary tailored
+# CVs, eliminated two-thirds of a real sample. This is purely a report
+# annotation -- it must never touch `final`, `penalty_total`, or any gate.
+
+
+def test_all_seven_criteria_high_produces_claims_all_flag():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # 100% of max, all seven
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert "claims all criteria" in a.flags
+    assert not any(f.startswith("claims ") for f in a.flags if f != "claims all criteria")
+
+
+def test_six_of_seven_criteria_high_produces_claims_6_7_flag():
+    keys = CFG.criterion_keys()
+    scores = {k: CFG.criterion(k).max for k in keys}
+    scores[keys[-1]] = 0  # one criterion scored zero -- below 60% of its max
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert "claims 6/7 criteria" in a.flags
+    assert "claims all criteria" not in a.flags
+
+
+def test_five_of_seven_criteria_high_produces_no_claims_flag():
+    keys = CFG.criterion_keys()
+    scores = {k: CFG.criterion(k).max for k in keys}
+    scores[keys[-1]] = 0
+    scores[keys[-2]] = 0
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert not any(f.startswith("claims") for f in a.flags)
+
+
+def test_claims_all_criteria_flag_never_sets_gate_or_changes_penalty_total():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert a.gate is None
+    assert a.penalty_total == 0.0
+    assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
+
+
+def test_claims_6_of_7_flag_never_sets_gate_or_changes_penalty_total():
+    keys = CFG.criterion_keys()
+    scores = {k: CFG.criterion(k).max for k in keys}
+    scores[keys[-1]] = 0
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert a.gate is None
+    assert a.penalty_total == 0.0
+
+
 def test_assess_needs_sponsorship_flag_no_score_effect_no_elimination():
     # An affirmative sponsorship answer must never gate or dock points --
     # it's information for the human, nothing more (REAL-DATA-ADDENDUM E4).

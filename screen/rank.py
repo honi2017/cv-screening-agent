@@ -209,6 +209,20 @@ _FLAG_CHIPS = {
 }
 
 
+def _high_scoring_criteria_count(verdict: dict[str, Any], cfg: RoleConfig) -> int:
+    """How many rubric criteria the judge scored at or above 60% of their max."""
+    scores = verdict["fit"]["scores"]
+    count = 0
+    for key in cfg.criterion_keys():
+        entry = scores.get(key)
+        if not entry:
+            continue
+        maximum = cfg.criterion(key).max
+        if maximum > 0 and float(entry["score"]) >= 0.6 * maximum:
+            count += 1
+    return count
+
+
 def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -> Assessment:
     gate, reasons = apply_gates(precheck, verdict, cfg)
     penalties = compute_penalties(precheck, verdict, cfg)
@@ -239,6 +253,31 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
         flags.append("needs sponsorship")
     if verdict.get("quote_warnings"):
         flags.append("quote warning")
+
+    # "Claims every criterion" flag -- deterministic, report-only, NO score
+    # effect and NO gate. This is a flag, not a penalty, on purpose: the
+    # judges used to carry two signals for exactly this kind of thing
+    # (generic_summary and an invented jd_language_mirroring), and as
+    # PENALTIES they fired on 83% of a real sample and eliminated two-thirds
+    # of it -- tailoring a CV to a posting is normal and the spec protects
+    # it, so those were correctly retired. But retiring them also removed
+    # any signal for the genuine extreme case -- a CV claiming strong,
+    # quantified evidence for all seven criteria at once, including the
+    # rare and specific ones -- which a human reviewer then had to catch by
+    # eye. The reason this stays a flag rather than becoming a new penalty
+    # is the same reason the old one was retired: "is this breadth genuine,
+    # or written to order?" is a judgment call a deterministic rule cannot
+    # make safely at scale, and getting it wrong the same way again would
+    # dock or eliminate genuinely broad, tailored candidates. A human
+    # reading the flagged CV next to its per-criterion quotes (which the
+    # report already shows) can make that call; this only makes sure they
+    # know to look.
+    total_criteria = len(cfg.criterion_keys())
+    high_scoring = _high_scoring_criteria_count(verdict, cfg)
+    if high_scoring == total_criteria:
+        flags.append("claims all criteria")
+    elif high_scoring == total_criteria - 1:
+        flags.append(f"claims {high_scoring}/{total_criteria} criteria")
 
     return Assessment(
         candidate_id=int(precheck["candidate_id"]),
