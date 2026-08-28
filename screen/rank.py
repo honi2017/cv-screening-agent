@@ -254,30 +254,39 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
     if verdict.get("quote_warnings"):
         flags.append("quote warning")
 
-    # "Claims every criterion" flag -- deterministic, report-only, NO score
-    # effect and NO gate. This is a flag, not a penalty, on purpose: the
-    # judges used to carry two signals for exactly this kind of thing
-    # (generic_summary and an invented jd_language_mirroring), and as
-    # PENALTIES they fired on 83% of a real sample and eliminated two-thirds
-    # of it -- tailoring a CV to a posting is normal and the spec protects
-    # it, so those were correctly retired. But retiring them also removed
-    # any signal for the genuine extreme case -- a CV claiming strong,
-    # quantified evidence for all seven criteria at once, including the
-    # rare and specific ones -- which a human reviewer then had to catch by
-    # eye. The reason this stays a flag rather than becoming a new penalty
-    # is the same reason the old one was retired: "is this breadth genuine,
-    # or written to order?" is a judgment call a deterministic rule cannot
-    # make safely at scale, and getting it wrong the same way again would
-    # dock or eliminate genuinely broad, tailored candidates. A human
-    # reading the flagged CV next to its per-criterion quotes (which the
-    # report already shows) can make that call; this only makes sure they
-    # know to look.
+    # "Broad claims, uncorroborated" flag -- deterministic, report-only, NO
+    # score effect and NO gate. This replaces an earlier flag that fired on
+    # "claims all/6-of-7 criteria" alone, which measurement showed was
+    # near-tautological with the final score: it fired on 85% of the top 13
+    # candidates by score versus 11% of the rest, because scoring highly on
+    # a seven-criterion rubric requires scoring well on most criteria. A
+    # flag that just restates the ranking tells a human nothing.
+    #
+    # What actually discriminates is breadth paired with the *absence* of
+    # anything independent corroborating it: a CV that ticks nearly every
+    # box, including the rare and specific ones, while offering nothing a
+    # reviewer can check independently (no verifiable LinkedIn) or while
+    # the judge itself flagged something suspicious (a Tier-2 signal). That
+    # combination is what a human reviewer actually caught by eye -- a
+    # top-scoring CV that ticked every box and had no verifiable LinkedIn.
+    #
+    # This stays a flag rather than becoming a new penalty for the same
+    # reason the old generic_summary/jd_language_mirroring signals were
+    # retired: as PENALTIES they fired on 83% of a real sample and
+    # eliminated two-thirds of it -- tailoring a CV to a posting is normal
+    # and the spec protects it. "Is this breadth genuine, or written to
+    # order?" is a judgment call a deterministic rule cannot make safely at
+    # scale, and getting it wrong the same way again would dock or
+    # eliminate genuinely broad, tailored candidates. A human reading the
+    # flagged CV next to its per-criterion quotes (which the report already
+    # shows) can make that call; this only makes sure they know to look.
     total_criteria = len(cfg.criterion_keys())
     high_scoring = _high_scoring_criteria_count(verdict, cfg)
-    if high_scoring == total_criteria:
-        flags.append("claims all criteria")
-    elif high_scoring == total_criteria - 1:
-        flags.append(f"claims {high_scoring}/{total_criteria} criteria")
+    broad_claims = high_scoring >= total_criteria - 1
+    linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
+    uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
+    if broad_claims and uncorroborated:
+        flags.append("broad claims, uncorroborated")
 
     return Assessment(
         candidate_id=int(precheck["candidate_id"]),

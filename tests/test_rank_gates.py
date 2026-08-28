@@ -325,54 +325,57 @@ def test_assess_records_flag_chips_for_report():
     assert a.timezone_hint == "unknown"
 
 
-# --- Fix 2: "claims every criterion" flag (deterministic, report-only) -----
+# --- Fix 2: "broad claims, uncorroborated" flag (deterministic, report-only)
 #
 # See the comment in screen.rank.assess for why this is a flag rather than a
 # penalty: the same signal, tried earlier as a penalty on ordinary tailored
 # CVs, eliminated two-thirds of a real sample. This is purely a report
 # annotation -- it must never touch `final`, `penalty_total`, or any gate.
+#
+# It replaces an earlier "claims all/6-of-7 criteria" flag that measurement
+# showed was near-tautological with the final score (85% of the top 13 by
+# score vs. 11% of the rest). The discriminating pattern is breadth paired
+# with nothing independent corroborating it -- absent LinkedIn or a Tier-2
+# signal -- not breadth alone.
 
 
-def test_all_seven_criteria_high_produces_claims_all_flag():
-    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # 100% of max, all seven
-    a = assess(precheck(), verdict(scores=scores), CFG)
-    assert "claims all criteria" in a.flags
-    assert not any(f.startswith("claims ") for f in a.flags if f != "claims all criteria")
+def test_broad_claims_and_no_linkedin_produces_flag():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # all seven at 100% of max
+    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" in a.flags
+    assert a.gate is None
+    assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
+    # The no-LinkedIn penalty still applies; the flag itself adds nothing.
+    assert a.penalty_total == 8.0
 
 
-def test_six_of_seven_criteria_high_produces_claims_6_7_flag():
+def test_six_of_seven_and_tier2_signal_produces_flag():
     keys = CFG.criterion_keys()
     scores = {k: CFG.criterion(k).max for k in keys}
     scores[keys[-1]] = 0  # one criterion scored zero -- below 60% of its max
+    flags = [{"tier": 2, "kind": "generic_bullet", "quote": "q", "explanation": "e"}]
+    a = assess(precheck(), verdict(flags=flags, scores=scores), CFG)
+    assert "broad claims, uncorroborated" in a.flags
+
+
+def test_all_seven_with_linkedin_and_no_tier2_produces_no_flag():
+    # The case the old design wrongly flagged: breadth alone, with a
+    # verifiable LinkedIn profile and nothing suspicious from the judge.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
     a = assess(precheck(), verdict(scores=scores), CFG)
-    assert "claims 6/7 criteria" in a.flags
-    assert "claims all criteria" not in a.flags
+    assert "broad claims, uncorroborated" not in a.flags
 
 
-def test_five_of_seven_criteria_high_produces_no_claims_flag():
+def test_five_of_seven_with_no_linkedin_produces_no_flag():
+    # Breadth threshold not met, even though corroboration is also absent.
     keys = CFG.criterion_keys()
     scores = {k: CFG.criterion(k).max for k in keys}
     scores[keys[-1]] = 0
     scores[keys[-2]] = 0
-    a = assess(precheck(), verdict(scores=scores), CFG)
-    assert not any(f.startswith("claims") for f in a.flags)
-
-
-def test_claims_all_criteria_flag_never_sets_gate_or_changes_penalty_total():
-    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
-    a = assess(precheck(), verdict(scores=scores), CFG)
-    assert a.gate is None
-    assert a.penalty_total == 0.0
-    assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
-
-
-def test_claims_6_of_7_flag_never_sets_gate_or_changes_penalty_total():
-    keys = CFG.criterion_keys()
-    scores = {k: CFG.criterion(k).max for k in keys}
-    scores[keys[-1]] = 0
-    a = assess(precheck(), verdict(scores=scores), CFG)
-    assert a.gate is None
-    assert a.penalty_total == 0.0
+    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" not in a.flags
 
 
 def test_assess_needs_sponsorship_flag_no_score_effect_no_elimination():
