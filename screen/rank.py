@@ -339,11 +339,22 @@ def rank_and_cut(
     needs_review: dict[int, str],
     withdrawn: set[int],
     calibration_order: list[int] | None = None,
+    known_ids: set[int] | None = None,
 ) -> CutResult:
     """Rank, apply the cap, and update the ledger in place.
 
     Pool counts everyone who applied except withdrawals — gated and
     needs-review candidates included — so the 20 % is honest.
+
+    `known_ids` is the full set of candidate ids in the current fetch (the
+    pipeline only fetches active candidates, so this is the active pool).
+    It lets us tell "still active but gated/needs-review/withdrawn" apart
+    from "no longer in the fetch at all" -- the latter means a human
+    actioned them in the ATS between runs and they never showed up in
+    `withdrawn` because we can no longer see their state. Defaults to
+    `None`, meaning "derive everything from the arguments as before and
+    mark nothing absent" -- kept for backward compatibility with callers
+    that don't have the full id set handy.
     """
     pool_ids = (set(assessments) | set(needs_review)) - withdrawn
     pool_size = len(pool_ids)
@@ -463,6 +474,34 @@ def rank_and_cut(
             existing.status_changed_run = run_id
             if new_status == "gated":
                 newly_gated.append(cid)
+
+    # --- Candidates who vanished from the fetch entirely -------------------
+    #
+    # The pipeline only fetches active candidates. A candidate who is
+    # rejected/hired/withdrawn in the ATS between runs doesn't get relisted
+    # with that state -- they just disappear from `candidates.json`, so
+    # they're never in `assessments`, never in `needs_review`, and never in
+    # `withdrawn` (which is built only from states we can still see). Their
+    # ledger entry would otherwise keep its old status forever.
+    #
+    # Leaving the active pool entirely is a human decision made in the ATS,
+    # so it gets the same `withdrawn` treatment as a visible rejection.
+    #
+    # This is the one case where an `accepted` status is allowed to change.
+    # The sticky-accept rule (see `existing.status == "accepted": continue`
+    # above) exists to stop the *algorithm* from displacing someone the team
+    # may already have contacted -- it was never meant to stop the pipeline
+    # from recording that a *human* has since rejected that same person in
+    # the ATS. A future reader should not "fix" this by exempting accepted
+    # entries here; that would silently keep declined candidates on the
+    # shortlist forever.
+    if known_ids is not None:
+        present_ids = set(assessments) | set(needs_review) | known_ids
+        for cid, existing in ledger.items():
+            if cid in present_ids or existing.status == "withdrawn":
+                continue
+            existing.status = "withdrawn"
+            existing.status_changed_run = run_id
 
     return CutResult(
         cap=cap,

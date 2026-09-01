@@ -230,3 +230,75 @@ def test_tiny_pool_yields_zero_slots():
     assert result.cap == 0
     assert result.accepted == []
     assert len(result.waitlist) == 4
+
+
+# --- Candidates who vanished from the fetch entirely ------------------------
+
+
+def test_ledger_entry_absent_from_known_ids_is_marked_withdrawn():
+    # Candidate 99 is in the ledger from a prior run but the ATS no longer
+    # returns them at all -- a human actioned them between runs.
+    ledger = {99: entry(99, "waitlist", 40.0, run="run-0")}
+    assessments = {i: a(i, 100 - i) for i in range(1, 6)}
+    result = rank_and_cut(
+        assessments, ledger, CFG, "run-2", {}, set(), known_ids={1, 2, 3, 4, 5}
+    )
+    assert ledger[99].status == "withdrawn"
+    assert ledger[99].status_changed_run == "run-2"
+    assert 99 not in result.accepted
+    assert 99 not in result.waitlist
+
+
+def test_accepted_entry_absent_from_known_ids_is_also_withdrawn():
+    # This is the one case where an already-accepted status is allowed to
+    # change: sticky-accept protects against the *algorithm* displacing
+    # someone, not against the pipeline recording that a *human* rejected
+    # that person in the ATS after the fact.
+    ledger = {99: entry(99, "accepted", 90.0, run="run-0")}
+    assessments = {i: a(i, 100 - i) for i in range(1, 6)}
+    result = rank_and_cut(
+        assessments, ledger, CFG, "run-2", {}, set(), known_ids={1, 2, 3, 4, 5}
+    )
+    assert ledger[99].status == "withdrawn"
+    assert ledger[99].status_changed_run == "run-2"
+    assert 99 not in result.accepted
+
+
+def test_withdrawn_absent_entry_is_excluded_from_the_ledger_accepted_count():
+    # The measured symptom: a stale "accepted" entry for a candidate who left
+    # the pool keeps inflating a ledger-wide accepted count forever, which
+    # shrinks "cap - accepted" for every future run even though this run's
+    # own cut.accepted was never wrong. Marking it withdrawn frees that
+    # phantom slot in the ledger itself, not just in this run's output.
+    ledger = {
+        99: entry(99, "accepted", 90.0, run="run-0"),
+        1: entry(1, "accepted", 95.0, run="run-0"),
+    }
+    assessments = {1: a(1, 95), **{i: a(i, 50 - i) for i in range(2, 6)}}
+    result = rank_and_cut(
+        assessments, ledger, CFG, "run-2", {}, set(), known_ids={1, 2, 3, 4, 5}
+    )
+    ledger_accepted_ids = {cid for cid, e in ledger.items() if e.status == "accepted"}
+    assert 99 not in ledger_accepted_ids
+    assert ledger_accepted_ids == set(result.accepted)
+
+
+def test_known_ids_none_marks_nothing_absent():
+    # Backward-compatible default: existing callers that don't pass
+    # known_ids see no behaviour change -- a stale ledger entry for a
+    # candidate no longer in `assessments` keeps its old status untouched,
+    # exactly as it did before `known_ids` existed.
+    ledger = {99: entry(99, "accepted", 90.0, run="run-0")}
+    assessments = {i: a(i, 100 - i) for i in range(1, 6)}
+    rank_and_cut(assessments, ledger, CFG, "run-2", {}, set())
+    assert ledger[99].status == "accepted"
+    assert ledger[99].status_changed_run == "run-0"
+
+
+def test_entries_still_present_in_assessments_are_untouched_by_known_ids():
+    ledger = {1: entry(1, "waitlist", 50.0, run="run-0")}
+    assessments = {i: a(i, 100 - i) for i in range(1, 6)}
+    result = rank_and_cut(
+        assessments, ledger, CFG, "run-2", {}, set(), known_ids={1, 2, 3, 4, 5}
+    )
+    assert ledger[1].status != "withdrawn"

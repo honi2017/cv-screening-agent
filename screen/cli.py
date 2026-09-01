@@ -236,11 +236,13 @@ def cmd_rank(args: argparse.Namespace) -> int:
     paths, cfg = _context(args)
     candidates, prechecks, verdicts, assessments, needs_review, withdrawn = _gather(paths, cfg)
     ledger = load_ledger(paths.ledger_json)
+    known_ids = set(candidates)
 
     if args.prepare:
         run_id = args.run_id or run_id_now(datetime.now())
         dry = rank_and_cut(
-            assessments, dict(ledger), cfg, run_id, needs_review, withdrawn
+            assessments, dict(ledger), cfg, run_id, needs_review, withdrawn,
+            known_ids=known_ids,
         )
         window = []
         for cid in dry.calibration_window:
@@ -287,7 +289,8 @@ def cmd_rank(args: argparse.Namespace) -> int:
 
     previous_status = {cid: entry.status for cid, entry in ledger.items()}
     cut = rank_and_cut(
-        assessments, ledger, cfg, run_id, needs_review, withdrawn, calibration_order
+        assessments, ledger, cfg, run_id, needs_review, withdrawn, calibration_order,
+        known_ids=known_ids,
     )
     save_ledger(ledger, paths.ledger_json)
 
