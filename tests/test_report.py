@@ -1,4 +1,5 @@
 import csv
+import re
 from pathlib import Path
 
 from screen.config import load_role
@@ -7,11 +8,13 @@ from screen.paths import Paths
 from screen.rank import Assessment, CutResult
 from screen.report import (
     ReportInput,
+    _detail_html,
     render_html,
     render_markdown,
     rows_for_csv,
     write_all,
 )
+import screen.report as report_mod
 
 CFG = load_role(Path(__file__).resolve().parents[1] / "roles" / "fde")
 
@@ -200,6 +203,61 @@ def test_html_avoids_hire_no_hire_language():
 def test_html_links_to_trakstar():
     html = render_html(_data(), CFG)
     assert "anduin.hire.trakstar.com" in html
+
+
+def _rows(html_fragment):
+    """Split an HTML fragment into its top-level <tr>...</tr> chunks."""
+    return re.findall(r"<tr[^>]*>.*?</tr>", html_fragment, re.S)
+
+
+def test_evidence_panel_is_its_own_full_width_row():
+    html = render_html(_data(), CFG)
+    shortlist_html = html.split("<h2>Shortlist</h2>", 1)[1].split("<h2>Waitlist</h2>", 1)[0]
+
+    header_count = shortlist_html.count("<th>")
+    assert header_count > 0
+
+    colspans = re.findall(r'<td colspan="(\d+)"', shortlist_html)
+    assert colspans, "expected the evidence panel to live in a colspan cell"
+    assert all(int(c) == header_count for c in colspans), (
+        "colspan must equal the number of header columns so they can't drift apart"
+    )
+
+
+def test_name_cell_no_longer_embeds_detail_panel():
+    html = render_html(_data(), CFG)
+    rows = _rows(html)
+    summary_idx = next(i for i, r in enumerate(rows) if "Cand1 Test" in r)
+    summary_row = rows[summary_idx]
+    detail_row = rows[summary_idx + 1]
+
+    assert "<details>" not in summary_row
+    assert "evidence" not in summary_row
+    assert "<details>" in detail_row
+    assert "detail-row" in detail_row
+
+
+def test_detail_html_empty_when_no_verdict():
+    data = _data()
+    data.verdicts.pop(3)
+    assert _detail_html(data, 3, CFG) == ""
+
+
+def test_candidate_table_skips_empty_detail_row(monkeypatch):
+    monkeypatch.setattr(report_mod, "_detail_html", lambda *a, **k: "")
+    html = report_mod.render_html(_data(), CFG)
+    assert not re.search(r'<tr class="[^"]*detail-row', html)
+    # summary rows still render normally
+    assert "Cand1 Test" in html
+
+
+def test_waitlist_detail_rows_are_grey():
+    html = render_html(_data(), CFG)
+    waitlist_html = html.split("<h2>Waitlist</h2>", 1)[1].split("<h2>Gated</h2>", 1)[0]
+    detail_rows = [r for r in _rows(waitlist_html) if "detail-row" in r]
+    assert detail_rows, "expected at least one evidence row in the waitlist table"
+    for row in detail_rows:
+        assert re.match(r'<tr class="[^"]*\bgrey\b[^"]*"', row)
 
 
 # --- Markdown ---------------------------------------------------------------

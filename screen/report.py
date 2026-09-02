@@ -74,8 +74,9 @@ tr.grey td { color:var(--muted); }
         margin:0 3px 3px 0; font-size:11px; color:var(--warn); white-space:nowrap; }
 .chip.bad { color:var(--bad); }
 details { margin:4px 0; } summary { cursor:pointer; color:var(--accent); font-size:12px; }
+.detail-row td { padding-top:0; padding-bottom:0; border-bottom:none; }
 .detail { background:#fafafa; border:1px solid var(--line); border-radius:6px;
-          padding:10px 12px; margin:6px 0 10px; }
+          padding:10px 12px; margin:6px 0 10px; width:100%; }
 .detail dl { display:grid; grid-template-columns:190px 1fr; gap:4px 12px; margin:0; }
 .detail dt { color:var(--muted); } .detail dd { margin:0; }
 blockquote { margin:2px 0 6px; padding:4px 10px; border-left:3px solid var(--line);
@@ -158,14 +159,14 @@ def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
     )
 
 
+_TABLE_COLUMNS = ("#", "Name", "Score", "Criteria", "Penalties", "Flags", "Links")
+
+
 def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: bool = False) -> str:
     if not ids:
         return '<p class="empty-note">None.</p>'
 
-    head = (
-        "<tr><th>#</th><th>Name</th><th>Score</th><th>Criteria</th>"
-        "<th>Penalties</th><th>Flags</th><th>Links</th></tr>"
-    )
+    head = "<tr>" + "".join(f"<th>{col}</th>" for col in _TABLE_COLUMNS) + "</tr>"
     body = []
     for rank, cid in enumerate(ids, start=1):
         assessment = data.assessments.get(cid)
@@ -186,10 +187,11 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
             if assessment.gate and entry and entry.status == "accepted"
             else ""
         )
+        row_class = "grey" if grey else ""
         body.append(
-            f'<tr class="{"grey" if grey else ""}">'
+            f'<tr class="{row_class}">'
             f"<td>{rank}</td>"
-            f"<td>{_e(data.name(cid))}{since}{gate_note}{_detail_html(data, cid, cfg)}</td>"
+            f"<td>{_e(data.name(cid))}{since}{gate_note}</td>"
             f'<td class="score">{assessment.final:g}</td>'
             f"<td>{_bars_html(data.verdicts[cid], cfg)}</td>"
             f"<td>{penalties}</td>"
@@ -197,6 +199,13 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
             f'<td><a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a></td>'
             "</tr>"
         )
+        detail = _detail_html(data, cid, cfg)
+        if detail:
+            detail_class = "detail-row grey" if grey else "detail-row"
+            body.append(
+                f'<tr class="{detail_class}">'
+                f'<td colspan="{len(_TABLE_COLUMNS)}">{detail}</td></tr>'
+            )
     return f"<table>{head}{''.join(body)}</table>"
 
 
