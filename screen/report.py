@@ -137,6 +137,14 @@ def _links_html(data: ReportInput, cid: int) -> str:
     url = resume_url(data.candidates.get(cid, {}))
     if url:
         links.append(f'<a {_NEW_TAB} href="{_e(url)}">Resume</a>')
+    linkedin = (data.prechecks.get(cid) or {}).get("linkedin") or {}
+    linkedin_url = linkedin.get("url")
+    # Rendered only when a profile is actually present: the "no LinkedIn"
+    # flag chip already communicates absence, and a dead anchor is worse
+    # than none -- see the -20 no-LinkedIn penalty, which exists precisely
+    # so a human clicks through here to verify the person is real.
+    if linkedin.get("present") and linkedin_url:
+        links.append(f'<a {_NEW_TAB} href="{_e(linkedin_url)}">LinkedIn</a>')
     return f'<span class="links">{"".join(links)}</span>'
 
 
@@ -188,12 +196,23 @@ def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
     years = precheck.get("years_experience") or {}
     linkedin = precheck.get("linkedin") or {}
     meta = precheck.get("pdf_meta") or {}
+    if linkedin.get("present"):
+        # The URL itself, not just the source, so the audit trail records
+        # WHICH profile was checked -- this is the only place a reviewer can
+        # click through to verify the person is real (the pipeline never
+        # fetches LinkedIn itself). Escaped like any other candidate-supplied
+        # text.
+        linkedin_detail = (
+            f"present via {_e(linkedin.get('source'))} — {_e(linkedin.get('url'))}"
+            f" — name match: {_e(linkedin.get('name_matches'))}"
+        )
+    else:
+        linkedin_detail = "not found"
     rows.extend(
         [
             f"<dt>Years computed</dt><dd>{_e(years.get('computed'))} "
             f"(confidence: {_e(years.get('confidence'))})</dd>",
-            f"<dt>LinkedIn</dt><dd>{'present via ' + _e(linkedin.get('source')) if linkedin.get('present') else 'not found'}"
-            f"{' — name match: ' + _e(linkedin.get('name_matches')) if linkedin.get('present') else ''}</dd>",
+            f"<dt>LinkedIn</dt><dd>{linkedin_detail}</dd>",
             f"<dt>PDF</dt><dd>{_e(precheck.get('pages'))} page(s); producer "
             f"{_e(meta.get('producer') or 'unknown')}; created "
             f"{_e(meta.get('minutes_before_submission'))} min before applying</dd>",

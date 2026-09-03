@@ -303,6 +303,50 @@ def test_candidate_without_resume_renders_only_trakstar_link():
     assert '<a href=""' not in cand2_row
 
 
+def test_candidate_with_linkedin_renders_anchor():
+    """The -20 no-LinkedIn penalty exists so a human clicks through to verify
+    the profile is real; the report must actually offer that click.
+    """
+    html = render_html(_data(), CFG)
+    shortlist_html = html.split("<h2>Shortlist</h2>", 1)[1].split("<h2>Waitlist</h2>", 1)[0]
+    m = re.search(r'<a\s[^>]*href="([^"]+)"[^>]*>LinkedIn</a>', shortlist_html)
+    assert m, "expected a LinkedIn anchor in the shortlist"
+    assert m.group(1).startswith("https://")
+
+
+def test_candidate_without_linkedin_renders_no_anchor():
+    """No profile means no anchor -- the `no LinkedIn` flag chip already
+    communicates the absence, and a dead anchor is worse than none.
+    """
+    data = _data()
+    data.prechecks[1]["linkedin"] = {
+        "present": False, "source": "none", "url": None, "name_matches": None,
+    }
+    html = render_html(data, CFG)
+    shortlist_html = html.split("<h2>Shortlist</h2>", 1)[1].split("<h2>Waitlist</h2>", 1)[0]
+    # The evidence panel's `<dt>LinkedIn</dt>` label is expected to remain
+    # (it says "not found"); only the clickable anchor must be absent.
+    assert not re.search(r"<a\s[^>]*>LinkedIn</a>", shortlist_html)
+
+
+def test_linkedin_anchor_has_new_tab_and_noopener_attributes():
+    html = render_html(_data(), CFG)
+    anchors = re.findall(r"<a\s[^>]*>LinkedIn</a>", html)
+    assert anchors, "expected at least one LinkedIn anchor"
+    for a in anchors:
+        assert 'target="_blank"' in a, a
+        assert "noopener" in a, a
+        assert "noreferrer" in a, a
+
+
+def test_evidence_panel_shows_linkedin_url():
+    """The audit trail must record WHICH profile was checked, not just that
+    one was found via a given source.
+    """
+    html = render_html(_data(), CFG)
+    assert "https://linkedin.com/in/x" in html
+
+
 def test_footer_mentions_link_behaviour():
     """The footer must explain what each link opens, and warn about the CV link.
 

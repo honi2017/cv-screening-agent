@@ -784,6 +784,31 @@ def _extract_linkedin_profile(value: str | None) -> tuple[str, str] | None:
     return m.group(0), slug
 
 
+def _normalize_linkedin_url(url: str) -> str:
+    """Make a validated profile URL absolute and clickable.
+
+    A schemeless value (`linkedin.com/in/<slug>`) is a *relative* path when
+    dropped into an `href` or a spreadsheet cell, so it resolves against the
+    report's own location and opens nothing -- measured on the real pool, 8
+    of 56 stored profile URLs had no scheme for exactly this reason. This
+    prepends `https://` when no scheme is present, and upgrades a plain
+    `http://` to `https://` (3 more of the 56): LinkedIn redirects the
+    cleartext scheme itself, but some clients block it outright before the
+    redirect ever happens.
+
+    Everything after the scheme -- `www.` or not, host, path, slug, any
+    query string -- is left exactly as the candidate supplied it. This is
+    normalisation for clickability only, called after the value has already
+    passed the profile-shape check in `_extract_linkedin_profile`; it does
+    NOT re-validate the value and must never be used to decide `present`.
+    """
+    if url.lower().startswith("https://"):
+        return url
+    if url.lower().startswith("http://"):
+        return "https://" + url[len("http://") :]
+    return "https://" + url
+
+
 def find_linkedin(
     markdown: str, profile_data: list[dict[str, Any]], full_name: str
 ) -> dict[str, Any]:
@@ -811,6 +836,12 @@ def find_linkedin(
     contains a real profile path counts as present; the CV-text fallback is
     validated through the exact same check, via `_extract_linkedin_profile`,
     so the two paths cannot disagree on what counts as a profile.
+
+    The stored `url` is normalised to an absolute `https://` link (see
+    `_normalize_linkedin_url`) purely so a reviewer's click actually goes
+    somewhere -- normalisation never runs on a value that failed the shape
+    check above, so it can't resurrect a rejected value, and it still does
+    NOT verify the profile exists.
     """
     raw = _linkedin_profile_value(profile_data or [])
     extracted = _extract_linkedin_profile(raw)
@@ -828,7 +859,7 @@ def find_linkedin(
     return {
         "present": True,
         "source": source,
-        "url": url,
+        "url": _normalize_linkedin_url(url),
         "name_matches": _slug_matches_name(slug, full_name),
     }
 

@@ -78,7 +78,10 @@ def test_find_linkedin_extracts_profile_embedded_in_redirect_wrapper():
     # Invented shape (no real candidate data) matching a real mangled-paste
     # case: a genuine profile path embedded inside an unrelated redirect
     # URL. The profile identifier is genuinely there and must be extracted,
-    # not rejected because the surrounding string isn't a valid URL.
+    # not rejected because the surrounding string isn't a valid URL. The
+    # extracted fragment carries no scheme, so it still comes out
+    # `https://`-prefixed -- normalisation runs on every value that passes
+    # the shape check, however it was extracted.
     pd = [
         {
             "name": "LinkedIn",
@@ -88,7 +91,7 @@ def test_find_linkedin_extracts_profile_embedded_in_redirect_wrapper():
     r = find_linkedin("no profile in cv body", pd, "Jane Doe")
     assert r["present"] is True
     assert r["source"] == "trakstar"
-    assert r["url"] == "www.linkedin.com/in/jane-doe-42"
+    assert r["url"] == "https://www.linkedin.com/in/jane-doe-42"
     assert r["name_matches"] is True
 
 
@@ -123,7 +126,58 @@ def test_find_linkedin_cv_text_extracts_profile_embedded_in_redirect_wrapper():
     r = find_linkedin(md, [], "Jane Doe")
     assert r["present"] is True
     assert r["source"] == "cv"
-    assert r["url"] == "www.linkedin.com/in/jane-doe-42"
+    assert r["url"] == "https://www.linkedin.com/in/jane-doe-42"
+
+
+# --- Fix: normalise a stored LinkedIn URL so it is actually clickable ------
+#
+# Measured over the real applicant pool, 8 of 56 recorded LinkedIn URLs had
+# no `http(s)://` prefix at all -- a schemeless value in an `href` (or a
+# spreadsheet cell) is a *relative* path, so a browser resolves it against
+# the report's own location and opens nothing. 3 more used plain `http://`,
+# which some clients block outright. Normalisation must run only on a value
+# that already passed the shape check -- it must never resurrect a value
+# ("N/A", "no", the bare site with no profile path) that was correctly
+# rejected as absent.
+
+
+def test_find_linkedin_schemeless_value_gains_https_scheme():
+    pd = [{"name": "LinkedIn", "value": "linkedin.com/in/alex-morgan"}]
+    r = find_linkedin("", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["url"] == "https://linkedin.com/in/alex-morgan"
+
+
+def test_find_linkedin_schemeless_www_value_keeps_www_and_gains_scheme():
+    pd = [{"name": "LinkedIn", "value": "www.linkedin.com/in/alex-morgan"}]
+    r = find_linkedin("", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["url"] == "https://www.linkedin.com/in/alex-morgan"
+
+
+def test_find_linkedin_http_value_upgraded_to_https():
+    pd = [{"name": "LinkedIn", "value": "http://www.linkedin.com/in/alex-morgan"}]
+    r = find_linkedin("", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["url"] == "https://www.linkedin.com/in/alex-morgan"
+
+
+def test_find_linkedin_https_value_left_unchanged():
+    pd = [{"name": "LinkedIn", "value": "https://www.linkedin.com/in/alex-morgan"}]
+    r = find_linkedin("", pd, "Alex Morgan")
+    assert r["present"] is True
+    assert r["url"] == "https://www.linkedin.com/in/alex-morgan"
+
+
+@pytest.mark.parametrize("value", ["N/A", "no", "https://www.linkedin.com/"])
+def test_find_linkedin_normalisation_does_not_resurrect_rejected_values(value):
+    # These are rejected by the shape check itself (no real profile path),
+    # and normalisation must never run on them -- it only ever touches a
+    # `url` that already passed that check.
+    pd = [{"name": "LinkedIn", "value": value}]
+    r = find_linkedin("no profile in cv body", pd, "Alex Morgan")
+    assert r["present"] is False
+    assert r["url"] is None
 
 
 def test_find_degree_detects_level_and_field():
