@@ -393,6 +393,35 @@ def test_markdown_names_newly_gated_with_gate():
     assert "G1" in md
 
 
+def test_delta_omits_the_no_slot_section():
+    """`no_slot` must not be rendered in either output.
+
+    It collects everyone clearing the quality floor once the cap is full, so
+    with no floor or a low one it is the whole waitlist restated under a
+    heading claiming they would have qualified -- on the real pool that was 46
+    people scoring down to 57. The Waitlist section already lists them in rank
+    order with their flags.
+    """
+    data = _data()
+    data.delta["no_slot"] = [2, 3]
+    html = render_html(data, CFG)
+    md = render_markdown(data, CFG)
+    assert "no slot" not in html.lower()
+    assert "would have qualified" not in html.lower()
+    assert "no slot" not in md.lower()
+    assert "would have qualified" not in md.lower()
+
+
+def test_delta_says_no_changes_when_only_no_slot_is_populated():
+    """A run whose only "delta" is no_slot has nothing to report."""
+    data = _data()
+    data.delta.update(
+        {"new": [], "newly_accepted": [], "newly_gated": [], "no_slot": [2, 3]}
+    )
+    assert "no changes" in render_html(data, CFG).lower()
+    assert "no changes" in render_markdown(data, CFG).lower()
+
+
 def test_markdown_reports_no_changes_when_delta_is_empty():
     data = _data()
     data.delta.update({"new": [], "newly_accepted": [], "newly_gated": [], "no_slot": []})

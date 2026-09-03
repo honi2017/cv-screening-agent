@@ -275,11 +275,16 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
 
 def _delta_html(data: ReportInput) -> str:
     delta = data.delta
+    # `no_slot` is deliberately not rendered. It collects everyone who clears the
+    # quality floor once the cap is full, so with no floor (a first run) or a low
+    # one it is simply the entire waitlist — 46 people down to 57 points on the
+    # real pool — restated under a heading claiming they would have qualified.
+    # The Waitlist section already shows them, in rank order, with their flags.
+    # The field is still computed and kept in the run record as an audit trail.
     labels = (
         ("new", "New applicants"),
         ("newly_accepted", "Newly shortlisted"),
         ("newly_gated", "Newly eliminated"),
-        ("no_slot", "Would have qualified, no slot"),
     )
     if not any(delta.get(key) for key, _ in labels):
         return '<p class="empty-note">No changes since the last run.</p>'
@@ -411,11 +416,12 @@ def render_markdown(data: ReportInput, cfg: RoleConfig) -> str:
         "",
     ]
 
+    # `no_slot` omitted here for the same reason as in the HTML delta — see the
+    # comment in _delta_html.
     sections = (
         ("newly_accepted", "Newly shortlisted"),
         ("new", "New applicants"),
         ("newly_gated", "Newly eliminated"),
-        ("no_slot", "Would have qualified, no slot"),
     )
     if not any(data.delta.get(key) for key, _ in sections):
         lines.append("No changes since the last run.")
@@ -431,7 +437,7 @@ def render_markdown(data: ReportInput, cfg: RoleConfig) -> str:
                 gate = f" [{assessment.gate}]" if assessment and assessment.gate else ""
                 summary = ""
                 verdict = data.verdicts.get(cid)
-                if verdict and key in {"newly_accepted", "no_slot"}:
+                if verdict and key == "newly_accepted":
                     summary = " — " + (verdict["fit"].get("summary") or "").split(".")[0]
                 lines.append(f"• {data.name(cid)}{score}{gate}{summary}")
             if len(ids) > 12:
