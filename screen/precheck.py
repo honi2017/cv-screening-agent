@@ -14,7 +14,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from screen import signals
+import httpx
+
+from screen import linkedin_check, signals
 from screen.config import RoleConfig
 from screen.parse import ParsedPdf, UnsupportedFormatError, parse_pdf
 from screen.paths import Paths
@@ -85,18 +87,60 @@ def minutes_before_submission(
     return (applied_dt - created).total_seconds() / 60
 
 
+def _linkedin_liveness(
+    linkedin: dict[str, Any],
+    previous: dict[str, Any] | None,
+    cfg: RoleConfig,
+    client: httpx.Client | None,
+    throttle: linkedin_check.Throttle | None,
+) -> str | None:
+    """The `linkedin.liveness` verdict to store, or `None` to add no field.
+
+    `None` means the check was skipped entirely -- either the config flag
+    `gates.check_linkedin_liveness` is off (no network, ever), or there is
+    no usable URL to check. Otherwise this is the cache: when the stored
+    precheck already carries a liveness verdict for this exact URL, that
+    verdict is reused and no request is made; only a new or changed URL
+    triggers a fresh HEAD request (see screen.linkedin_check).
+    """
+    if not cfg.gates.get("check_linkedin_liveness"):
+        return None
+    url = linkedin.get("url")
+    if not url:
+        return None
+
+    if previous is not None:
+        prev_linkedin = previous.get("linkedin") or {}
+        if prev_linkedin.get("url") == url and prev_linkedin.get("liveness") is not None:
+            return prev_linkedin["liveness"]
+
+    if throttle is not None:
+        throttle.wait()
+    return linkedin_check.check_profile(url, client=client)
+
+
 def build_precheck(
     candidate: dict[str, Any],
     parsed: ParsedPdf,
     cfg: RoleConfig,
     today: tuple[int, int],
     pool_dups: list[dict[str, Any]],
+    previous: dict[str, Any] | None = None,
+    linkedin_client: httpx.Client | None = None,
+    linkedin_throttle: linkedin_check.Throttle | None = None,
 ) -> tuple[dict[str, Any], str]:
     """Build the precheck payload and the redacted markdown together.
 
     Returns both because the redacted text is a by-product of the same
     redaction pass whose statistics land in the payload — splitting them
     would redact twice.
+
+    `previous` is the candidate's last-written precheck payload (or `None`
+    for a first-ever run), used only to let the LinkedIn liveness check
+    reuse a cached verdict instead of re-requesting an unchanged URL --
+    see `_linkedin_liveness`. `linkedin_client`/`linkedin_throttle` are
+    injection points for that same check: tests pass a fake client so
+    nothing here ever touches the real network.
     """
     md = parsed.markdown
     bullets = extract_bullets(md)
@@ -108,6 +152,11 @@ def build_precheck(
     )
     date_ranges = signals.extract_date_ranges(md)
     redaction = redact(md, candidate)
+
+    linkedin = signals.find_linkedin(md, profile_data, full_name)
+    liveness = _linkedin_liveness(linkedin, previous, cfg, linkedin_client, linkedin_throttle)
+    if liveness is not None:
+        linkedin = {**linkedin, "liveness": liveness}
 
     return {
         "candidate_id": int(candidate["id"]),
@@ -135,7 +184,7 @@ def build_precheck(
         "gap_over_12m": signals.has_gap_over(
             date_ranges, today, months=12, years_back=6
         ),
-        "linkedin": signals.find_linkedin(md, profile_data, full_name),
+        "linkedin": linkedin,
         "degree": signals.find_degree(md),
         "location": signals.find_location(md, profile_data),
         "redaction": {
@@ -173,13 +222,30 @@ def _resolve_resume(resumes_dir: Path, cid: int) -> Path | None:
 
 
 def run_stage(
-    paths: Paths, cfg: RoleConfig, today: tuple[int, int], force: bool = False
+    paths: Paths,
+    cfg: RoleConfig,
+    today: tuple[int, int],
+    force: bool = False,
+    linkedin_client: httpx.Client | None = None,
+    linkedin_throttle: linkedin_check.Throttle | None = None,
 ) -> dict[str, Any]:
     """Precheck every candidate whose PDF or rules version changed.
 
     Pool duplicates are recomputed over the whole pool every run, because a new
     arrival can reveal that an already-processed CV used the same template.
+
+    `linkedin_client`/`linkedin_throttle` are injection points for the
+    LinkedIn liveness check (see screen.linkedin_check and
+    `_linkedin_liveness`): production leaves both `None`, which gets a real
+    client per check and a real ~1s delay between them; tests inject their
+    own so nothing here ever touches the network. When the check is enabled
+    (`gates.check_linkedin_liveness`) and no throttle was supplied, one is
+    created for the whole run so consecutive checks are spaced out rather
+    than firing back-to-back.
     """
+    if cfg.gates.get("check_linkedin_liveness") and linkedin_throttle is None:
+        linkedin_throttle = linkedin_check.Throttle()
+
     candidates = json.loads(paths.candidates_json.read_text())
     parsed_by_id: dict[int, ParsedPdf] = {}
     needs_review: dict[int, str] = {}
@@ -221,20 +287,32 @@ def run_stage(
         out_path = paths.prechecks / f"{cid}.json"
         want_key = precheck_key(parsed.sha256, cfg.precheck_rules_version)
 
-        if not force and out_path.exists():
+        # Loaded whenever a precheck already exists, force or not: even a
+        # forced/rules-version rebuild should still let the LinkedIn liveness
+        # check (below, via `previous`) reuse a cached verdict for an
+        # unchanged URL rather than re-requesting it.
+        existing: dict[str, Any] | None = None
+        if out_path.exists():
             try:
                 existing = json.loads(out_path.read_text())
             except json.JSONDecodeError:
-                existing = {}
-            # Re-run when the PDF or the rules changed, or when the pool pass
-            # discovered duplicates the stored file does not know about.
-            same_key = existing.get("precheck_key") == want_key
-            same_dups = existing.get("pool_duplicate_bullets", []) == dups.get(cid, [])
-            if same_key and same_dups:
-                skipped.append(cid)
-                continue
+                existing = None
+            if not force and existing is not None:
+                # Re-run when the PDF or the rules changed, or when the pool
+                # pass discovered duplicates the stored file does not know
+                # about.
+                same_key = existing.get("precheck_key") == want_key
+                same_dups = existing.get("pool_duplicate_bullets", []) == dups.get(cid, [])
+                if same_key and same_dups:
+                    skipped.append(cid)
+                    continue
 
-        payload, redacted_md = build_precheck(c, parsed, cfg, today, dups.get(cid, []))
+        payload, redacted_md = build_precheck(
+            c, parsed, cfg, today, dups.get(cid, []),
+            previous=existing,
+            linkedin_client=linkedin_client,
+            linkedin_throttle=linkedin_throttle,
+        )
         _write_json(out_path, payload)
         _write_text(paths.redacted / f"{cid}.md", redacted_md)
         processed.append(cid)

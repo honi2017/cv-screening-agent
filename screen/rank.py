@@ -151,6 +151,23 @@ def compute_penalties(
             }
         )
 
+    # Separate from, and additional to, no_linkedin/linkedin_name_mismatch
+    # above -- a candidate can supply a well-formed URL (so `present` is
+    # True and no_linkedin never fires) that nonetheless doesn't resolve to
+    # a real profile. Only "dead" is ever penalised here: "live" adds
+    # nothing, and "unknown" (network error, timeout, or an ambiguous
+    # status code) MUST add nothing either -- see screen.linkedin_check's
+    # module docstring for why treating "unknown" as "probably dead" would
+    # be unsafe at scale.
+    if linkedin.get("liveness") == "dead":
+        out.append(
+            {
+                "kind": "linkedin_dead",
+                "points": p["linkedin_dead"],
+                "detail": f"LinkedIn profile does not resolve ({linkedin.get('url')})",
+            }
+        )
+
     for flag in _judge_flags(verdict, 2):
         out.append(
             {
@@ -196,12 +213,26 @@ def compute_penalties(
             }
         )
 
+    # See `_broad_claims_uncorroborated` and the long comment in `assess` --
+    # this used to be a report-only flag with no score effect; the hiring
+    # team asked for it to carry weight, so it is now a penalty (never a
+    # gate) computed from the exact same condition the flag uses.
+    if _broad_claims_uncorroborated(precheck, verdict, cfg):
+        out.append(
+            {
+                "kind": "broad_claims",
+                "points": p["broad_claims"],
+                "detail": "claims strength on nearly every rubric criterion with nothing independently corroborating it",
+            }
+        )
+
     return out
 
 
 _FLAG_CHIPS = {
     "no_linkedin": "no LinkedIn",
     "linkedin_name_mismatch": "LinkedIn mismatch",
+    "linkedin_dead": "LinkedIn dead",
     "pool_duplicate": "template dup",
     "years_4_to_5": "4-5 yrs",
     "no_degree": "no degree",
@@ -221,6 +252,25 @@ def _high_scoring_criteria_count(verdict: dict[str, Any], cfg: RoleConfig) -> in
         if maximum > 0 and float(entry["score"]) >= 0.6 * maximum:
             count += 1
     return count
+
+
+def _broad_claims_uncorroborated(
+    precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
+) -> bool:
+    """True when the CV claims strength on nearly every rubric criterion while
+    offering nothing independently checkable -- see the long comment in
+    `assess` for the history of this signal and why this, not "claims
+    all/6-of-7 criteria" alone, is what the deterministic layer safely
+    commits to. Computed once here and used for both the `broad_claims`
+    penalty (compute_penalties) and the matching report flag (assess) so the
+    two can never disagree about which candidates it applies to.
+    """
+    total_criteria = len(cfg.criterion_keys())
+    high_scoring = _high_scoring_criteria_count(verdict, cfg)
+    broad = high_scoring >= total_criteria - 1
+    linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
+    uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
+    return broad and uncorroborated
 
 
 def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -> Assessment:
@@ -254,9 +304,11 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
     if verdict.get("quote_warnings"):
         flags.append("quote warning")
 
-    # "Broad claims, uncorroborated" flag -- deterministic, report-only, NO
-    # score effect and NO gate. This replaces an earlier flag that fired on
-    # "claims all/6-of-7 criteria" alone, which measurement showed was
+    # "Broad claims, uncorroborated" flag -- paired with the `broad_claims`
+    # penalty above (both come from `_broad_claims_uncorroborated`, computed
+    # once, so the flag and the deduction can never disagree about who they
+    # apply to). This replaced an earlier flag that fired on "claims
+    # all/6-of-7 criteria" alone, which measurement showed was
     # near-tautological with the final score: it fired on 85% of the top 13
     # candidates by score versus 11% of the rest, because scoring highly on
     # a seven-criterion rubric requires scoring well on most criteria. A
@@ -270,22 +322,27 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
     # combination is what a human reviewer actually caught by eye -- a
     # top-scoring CV that ticked every box and had no verifiable LinkedIn.
     #
-    # This stays a flag rather than becoming a new penalty for the same
-    # reason the old generic_summary/jd_language_mirroring signals were
-    # retired: as PENALTIES they fired on 83% of a real sample and
-    # eliminated two-thirds of it -- tailoring a CV to a posting is normal
-    # and the spec protects it. "Is this breadth genuine, or written to
-    # order?" is a judgment call a deterministic rule cannot make safely at
-    # scale, and getting it wrong the same way again would dock or
-    # eliminate genuinely broad, tailored candidates. A human reading the
-    # flagged CV next to its per-criterion quotes (which the report already
-    # shows) can make that call; this only makes sure they know to look.
-    total_criteria = len(cfg.criterion_keys())
-    high_scoring = _high_scoring_criteria_count(verdict, cfg)
-    broad_claims = high_scoring >= total_criteria - 1
-    linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
-    uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
-    if broad_claims and uncorroborated:
+    # This was KEPT as a flag with NO score effect and NO gate for a while,
+    # for the same reason the old generic_summary/jd_language_mirroring
+    # signals were retired: as PENALTIES they fired on 83% of a real sample
+    # and eliminated two-thirds of it -- tailoring a CV to a posting is
+    # normal and the spec protects it. "Is this breadth genuine, or written
+    # to order?" is a judgment call a deterministic rule cannot make safely
+    # at scale, and getting it wrong the same way again would dock or
+    # eliminate genuinely broad, tailored candidates.
+    #
+    # The hiring team subsequently reviewed real output and read these CVs
+    # as written to match the job description by AI rather than genuinely
+    # broad -- a report flag with no score effect wasn't acting on that
+    # judgment, so they asked for it to carry weight. It is now
+    # `penalties.broad_claims` (Change 3), but deliberately still a
+    # PENALTY, not a new gate: it lowers a candidate's rank rather than
+    # eliminating them outright, which keeps exactly the safety margin the
+    # paragraph above argues for -- a human reading the flagged CV next to
+    # its per-criterion quotes (which the report already shows) can still
+    # override a rank-lowering that turns out to be wrong; a gate would
+    # have foreclosed that entirely.
+    if _broad_claims_uncorroborated(precheck, verdict, cfg):
         flags.append("broad claims, uncorroborated")
 
     return Assessment(

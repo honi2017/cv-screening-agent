@@ -243,11 +243,67 @@ def test_linkedin_unknown_match_is_not_penalised():
     assert compute_penalties(pc, verdict(), CFG) == []
 
 
+# --- Change 1: LinkedIn liveness penalty ------------------------------------
+#
+# Separate from, and additional to, no_linkedin (which applies only when
+# there is no usable URL at all -- present=False). A "dead" verdict never
+# suppresses no_linkedin/linkedin_name_mismatch and is never suppressed by
+# them; the two penalties simply stack when both conditions hold.
+
+
+def test_linkedin_dead_is_penalised():
+    pc = precheck(
+        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "dead"}
+    )
+    pens = compute_penalties(pc, verdict(), CFG)
+    dead = [p for p in pens if p["kind"] == "linkedin_dead"]
+    assert len(dead) == 1
+    # read the value from config, per the same policy-dial reasoning as
+    # no_linkedin above.
+    assert dead[0]["points"] == CFG.penalties["linkedin_dead"]
+
+
+def test_linkedin_live_is_not_penalised():
+    pc = precheck(
+        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "live"}
+    )
+    assert not any(p["kind"] == "linkedin_dead" for p in compute_penalties(pc, verdict(), CFG))
+
+
+def test_linkedin_unknown_liveness_is_not_penalised():
+    # The critical safety property from screen.linkedin_check: "unknown" (a
+    # network error, a timeout, or an ambiguous status code) must never be
+    # treated as "probably dead".
+    pc = precheck(
+        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "unknown"}
+    )
+    assert not any(p["kind"] == "linkedin_dead" for p in compute_penalties(pc, verdict(), CFG))
+
+
+def test_linkedin_dead_penalty_stacks_with_name_mismatch():
+    pc = precheck(
+        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": False, "liveness": "dead"}
+    )
+    kinds = {p["kind"] for p in compute_penalties(pc, verdict(), CFG)}
+    assert {"linkedin_name_mismatch", "linkedin_dead"} <= kinds
+
+
+def test_linkedin_dead_produces_flag_chip():
+    pc = precheck(
+        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "dead"}
+    )
+    a = assess(pc, verdict(), CFG)
+    assert "LinkedIn dead" in a.flags
+
+
 def test_tier2_penalties_charged_per_signal():
     flags = [{"tier": 2, "kind": f"k{i}", "quote": "q", "explanation": "e"} for i in range(2)]
     pens = compute_penalties(precheck(), verdict(flags=flags), CFG)
     tier2 = [p for p in pens if p["kind"] == "tier2_signal"]
-    assert sum(p["points"] for p in tier2) == 10
+    # Read the per-signal value from config rather than hardcoding it: Change
+    # 2 doubled tier2_signal from 5 to 10, and a literal here would silently
+    # drift from role.json the next time the team retunes it.
+    assert sum(p["points"] for p in tier2) == 2 * CFG.penalties["tier2_signal"]
 
 
 def test_pool_duplicate_penalty():
@@ -329,49 +385,59 @@ def test_assess_records_flag_chips_for_report():
     assert a.timezone_hint == "unknown"
 
 
-# --- Fix 2: "broad claims, uncorroborated" flag (deterministic, report-only)
+# --- Fix 2 / Change 3: "broad claims, uncorroborated" -----------------------
 #
-# See the comment in screen.rank.assess for why this is a flag rather than a
-# penalty: the same signal, tried earlier as a penalty on ordinary tailored
-# CVs, eliminated two-thirds of a real sample. This is purely a report
-# annotation -- it must never touch `final`, `penalty_total`, or any gate.
+# See the comment in screen.rank.assess for the full history: this was kept
+# as a flag with NO score effect for a while, because the same signal, tried
+# earlier as a penalty on ordinary tailored CVs, eliminated two-thirds of a
+# real sample. It replaced an earlier "claims all/6-of-7 criteria" flag that
+# measurement showed was near-tautological with the final score (85% of the
+# top 13 by score vs. 11% of the rest). The discriminating pattern is
+# breadth paired with nothing independent corroborating it -- absent
+# LinkedIn or a Tier-2 signal -- not breadth alone.
 #
-# It replaces an earlier "claims all/6-of-7 criteria" flag that measurement
-# showed was near-tautological with the final score (85% of the top 13 by
-# score vs. 11% of the rest). The discriminating pattern is breadth paired
-# with nothing independent corroborating it -- absent LinkedIn or a Tier-2
-# signal -- not breadth alone.
+# Change 3: the hiring team reviewed real output and asked for this signal
+# to carry weight, so it is now ALSO `penalties.broad_claims` -- applied by
+# `compute_penalties` from the exact same condition that produces the flag
+# (`screen.rank._broad_claims_uncorroborated`), so the two can never
+# disagree about who they apply to. It is a penalty, never a gate: it must
+# lower a rank, not eliminate anyone.
 
 
-def test_broad_claims_and_no_linkedin_produces_flag():
+def test_broad_claims_and_no_linkedin_produces_flag_and_penalty():
     scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # all seven at 100% of max
     pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
     a = assess(pc, verdict(scores=scores), CFG)
     assert "broad claims, uncorroborated" in a.flags
     assert a.gate is None
     assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
-    # The no-LinkedIn penalty still applies; the flag itself adds nothing.
-    assert a.penalty_total == float(CFG.penalties["no_linkedin"])
+    # Both the no-LinkedIn penalty AND the new broad_claims penalty apply --
+    # read both values from config rather than hardcoding their sum.
+    assert any(p["kind"] == "broad_claims" for p in a.penalties)
+    assert a.penalty_total == float(CFG.penalties["no_linkedin"] + CFG.penalties["broad_claims"])
 
 
-def test_six_of_seven_and_tier2_signal_produces_flag():
+def test_six_of_seven_and_tier2_signal_produces_flag_and_penalty():
     keys = CFG.criterion_keys()
     scores = {k: CFG.criterion(k).max for k in keys}
     scores[keys[-1]] = 0  # one criterion scored zero -- below 60% of its max
     flags = [{"tier": 2, "kind": "generic_bullet", "quote": "q", "explanation": "e"}]
     a = assess(precheck(), verdict(flags=flags, scores=scores), CFG)
     assert "broad claims, uncorroborated" in a.flags
+    assert any(p["kind"] == "broad_claims" for p in a.penalties)
+    assert a.gate is None
 
 
-def test_all_seven_with_linkedin_and_no_tier2_produces_no_flag():
+def test_all_seven_with_linkedin_and_no_tier2_produces_no_flag_or_penalty():
     # The case the old design wrongly flagged: breadth alone, with a
     # verifiable LinkedIn profile and nothing suspicious from the judge.
     scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
     a = assess(precheck(), verdict(scores=scores), CFG)
     assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
 
 
-def test_five_of_seven_with_no_linkedin_produces_no_flag():
+def test_five_of_seven_with_no_linkedin_produces_no_flag_or_penalty():
     # Breadth threshold not met, even though corroboration is also absent.
     keys = CFG.criterion_keys()
     scores = {k: CFG.criterion(k).max for k in keys}
@@ -380,6 +446,16 @@ def test_five_of_seven_with_no_linkedin_produces_no_flag():
     pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
     a = assess(pc, verdict(scores=scores), CFG)
     assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+
+
+def test_broad_claims_penalty_value_read_from_config():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
+    pens = compute_penalties(pc, verdict(scores=scores), CFG)
+    broad = [p for p in pens if p["kind"] == "broad_claims"]
+    assert len(broad) == 1
+    assert broad[0]["points"] == CFG.penalties["broad_claims"]
 
 
 def test_assess_needs_sponsorship_flag_no_score_effect_no_elimination():

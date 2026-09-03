@@ -1,7 +1,9 @@
+import dataclasses
 import json
 import sys
 from pathlib import Path
 
+import httpx
 import pytest
 
 from screen.config import load_role
@@ -257,3 +259,132 @@ def test_run_stage_missing_resume_of_either_extension_needs_review(tmp_path, pdf
     paths.candidates_json.write_text(json.dumps(candidates, indent=2))
     result = run_stage(paths, CFG, TODAY)
     assert result["needs_review"] == {1: "missing_resume"}
+
+
+# --- Change 1: LinkedIn liveness check, wired into the precheck stage ------
+#
+# Every client here is httpx.MockTransport-backed; none makes a real request
+# (the suite-wide conftest.py fixture would block one anyway).
+
+
+def _counting_client(status_code: int):
+    """A client that answers every HEAD with `status_code` and counts calls."""
+    calls = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls["n"] += 1
+        return httpx.Response(status_code)
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), calls
+
+
+def _seed_with_linkedin(tmp_path, pdfs, key: str, linkedin_url: str | None):
+    """Lay out a single candidate whose LinkedIn URL is the explicit ATS
+    field (not the CV text), so a test can change it between runs.
+    """
+    paths = Paths(root=tmp_path, opening_id="704353")
+    paths.ensure()
+    pdf = paths.resumes / "1.pdf"
+    pdf.write_bytes(pdfs[key].read_bytes())
+    profile_data = [{"name": "LinkedIn", "value": linkedin_url}] if linkedin_url else []
+    candidates = [
+        {
+            "id": 1,
+            "first_name": "Cand1",
+            "last_name": "Test",
+            "email": "c1@example.com",
+            "phone": "",
+            "created_date": "2026-08-01T10:00:00Z",
+            "profile_data": profile_data,
+            "resume": {"file_name": "1.pdf"},
+        }
+    ]
+    paths.candidates_json.write_text(json.dumps(candidates, indent=2))
+    parsed = parse_pdf(pdf)
+    write_parsed(parsed, paths.parsed / "1.md", paths.parsed / "1.meta.json")
+    return paths
+
+
+def test_build_precheck_records_linkedin_liveness_verdict(pdfs):
+    client, calls = _counting_client(200)  # 200 -> live
+    p, _redacted = build_precheck(
+        CANDIDATE, parse_pdf(pdfs["clean"]), CFG, TODAY, [], linkedin_client=client
+    )
+    assert p["linkedin"]["liveness"] == "live"
+    assert calls["n"] == 1
+
+
+def test_build_precheck_reuses_cached_liveness_for_unchanged_url(pdfs):
+    # The cached verdict is "dead" but a live client would answer 200 (live)
+    # -- if the cache were ignored, the result below would flip to "live".
+    client, calls = _counting_client(200)
+    previous = {"linkedin": {"url": "https://linkedin.com/in/alexmorgan", "liveness": "dead"}}
+    p, _redacted = build_precheck(
+        CANDIDATE, parse_pdf(pdfs["clean"]), CFG, TODAY, [],
+        previous=previous, linkedin_client=client,
+    )
+    assert p["linkedin"]["liveness"] == "dead"
+    assert calls["n"] == 0
+
+
+def test_build_precheck_rechecks_liveness_when_url_changed(pdfs):
+    client, calls = _counting_client(200)
+    previous = {"linkedin": {"url": "https://linkedin.com/in/someone-else", "liveness": "dead"}}
+    p, _redacted = build_precheck(
+        CANDIDATE, parse_pdf(pdfs["clean"]), CFG, TODAY, [],
+        previous=previous, linkedin_client=client,
+    )
+    assert p["linkedin"]["liveness"] == "live"
+    assert calls["n"] == 1
+
+
+def test_build_precheck_skips_liveness_check_entirely_when_flag_off(pdfs):
+    cfg_off = dataclasses.replace(CFG, gates={**CFG.gates, "check_linkedin_liveness": False})
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("must not make any request when the config flag is off")
+
+    client = httpx.Client(transport=httpx.MockTransport(handler))
+    p, _redacted = build_precheck(
+        CANDIDATE, parse_pdf(pdfs["clean"]), cfg_off, TODAY, [], linkedin_client=client
+    )
+    assert "liveness" not in p["linkedin"]
+
+
+def test_run_stage_does_not_recheck_linkedin_when_url_unchanged(tmp_path, pdfs):
+    paths = _seed_with_linkedin(tmp_path, pdfs, "clean", "https://linkedin.com/in/samestable")
+
+    client1, calls1 = _counting_client(200)
+    run_stage(paths, CFG, TODAY, linkedin_client=client1)
+    assert calls1["n"] == 1
+    payload = json.loads((paths.prechecks / "1.json").read_text())
+    assert payload["linkedin"]["liveness"] == "live"
+
+    # A forced rebuild with the SAME URL must reuse the cached verdict, not
+    # re-request -- proven by a client that would flip the answer to "dead"
+    # if it were called.
+    client2, calls2 = _counting_client(999)
+    run_stage(paths, CFG, TODAY, force=True, linkedin_client=client2)
+    assert calls2["n"] == 0
+    payload2 = json.loads((paths.prechecks / "1.json").read_text())
+    assert payload2["linkedin"]["liveness"] == "live"
+
+
+def test_run_stage_rechecks_linkedin_when_url_changed(tmp_path, pdfs):
+    paths = _seed_with_linkedin(tmp_path, pdfs, "clean", "https://linkedin.com/in/first-slug")
+
+    client1, calls1 = _counting_client(200)
+    run_stage(paths, CFG, TODAY, linkedin_client=client1)
+    assert calls1["n"] == 1
+
+    candidates = json.loads(paths.candidates_json.read_text())
+    candidates[0]["profile_data"] = [
+        {"name": "LinkedIn", "value": "https://linkedin.com/in/second-slug"}
+    ]
+    paths.candidates_json.write_text(json.dumps(candidates, indent=2))
+
+    client2, calls2 = _counting_client(999)
+    run_stage(paths, CFG, TODAY, force=True, linkedin_client=client2)
+    assert calls2["n"] == 1
+    payload = json.loads((paths.prechecks / "1.json").read_text())
+    assert payload["linkedin"]["liveness"] == "dead"

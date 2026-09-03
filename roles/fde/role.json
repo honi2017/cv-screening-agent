@@ -67,16 +67,19 @@
       "flowcv"
     ],
     "metadata_minutes_threshold": 30,
-    "min_text_chars": 200
+    "min_text_chars": 200,
+    "check_linkedin_liveness": true
   },
   "penalties": {
     "no_linkedin": 20,
     "linkedin_name_mismatch": 8,
-    "tier2_signal": 5,
+    "linkedin_dead": 10,
+    "tier2_signal": 10,
     "pool_duplicate": 10,
     "years_4_to_5": 10,
     "no_degree": 5,
-    "short_stints": 5
+    "short_stints": 5,
+    "broad_claims": 10
   },
   "tiebreak_timezones": [
     "ET",
