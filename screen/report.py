@@ -19,7 +19,18 @@ from screen.ledger import LedgerEntry
 from screen.paths import Paths
 from screen.rank import Assessment, CutResult
 
-TRAKSTAR_BASE = "https://anduin.hire.trakstar.com/app/#candidates"
+# NOTE: this per-candidate route is UNVERIFIED. As written it resolves to the
+# opening's general candidate list, not the individual candidate's record --
+# the Trakstar web app is a single-page app with a hash-based client-side
+# router, and the API exposes no permalink field on the candidate object (no
+# `url`, no `link`) from which the real per-candidate route could be derived.
+# The one URL known to work is the list view for an opening, e.g.:
+#   https://anduin.hire.trakstar.com/app/#candidates/list/selected_openings=704353&orderBy=date_created&order=desc/p:1/
+# When the correct per-candidate route is confirmed, fix it by editing this
+# template only -- nothing else in this module encodes the route.
+TRAKSTAR_URL_TEMPLATE = (
+    "https://anduin.hire.trakstar.com/app/#candidates/{candidate_id}?opening={opening_id}"
+)
 
 
 @dataclass(frozen=True)
@@ -42,7 +53,17 @@ class ReportInput:
 
 
 def trakstar_url(opening_id: str, candidate_id: int) -> str:
-    return f"{TRAKSTAR_BASE}/{candidate_id}?opening={opening_id}"
+    return TRAKSTAR_URL_TEMPLATE.format(candidate_id=candidate_id, opening_id=opening_id)
+
+
+def resume_url(candidate: dict[str, Any]) -> str | None:
+    """The candidate's resume download link, straight from the ATS record.
+
+    This is a tokenised URL issued by the applicant-tracking system: it grants
+    access to the CV file with no authentication required, so treat it as
+    sensitive in the same way as the CV contents it points to.
+    """
+    return (candidate.get("resume") or {}).get("file_url") or None
 
 
 def _e(value: Any) -> str:
@@ -85,7 +106,17 @@ blockquote { margin:2px 0 6px; padding:4px 10px; border-left:3px solid var(--lin
 footer { margin-top:36px; color:var(--muted); font-size:12px; }
 footer table { max-width:760px; }
 .empty-note { color:var(--muted); font-style:italic; }
+.links a { margin-right:10px; white-space:nowrap; }
+.links a:last-child { margin-right:0; }
 """
+
+
+def _links_html(data: ReportInput, cid: int) -> str:
+    links = [f'<a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a>']
+    url = resume_url(data.candidates.get(cid, {}))
+    if url:
+        links.append(f'<a href="{_e(url)}">Resume</a>')
+    return f'<span class="links">{"".join(links)}</span>'
 
 
 def _bars_html(verdict: dict[str, Any], cfg: RoleConfig) -> str:
@@ -196,7 +227,7 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
             f"<td>{_bars_html(data.verdicts[cid], cfg)}</td>"
             f"<td>{penalties}</td>"
             f"<td>{chips or '—'}</td>"
-            f'<td><a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a></td>'
+            f"<td>{_links_html(data, cid)}</td>"
             "</tr>"
         )
         detail = _detail_html(data, cid, cfg)
@@ -243,7 +274,7 @@ def render_html(data: ReportInput, cfg: RoleConfig) -> str:
 
     needs_rows = "".join(
         f"<tr><td>{_e(data.name(cid))}</td><td>{_e(reason)}</td>"
-        f'<td><a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a></td></tr>'
+        f"<td>{_links_html(data, cid)}</td></tr>"
         for cid, reason in sorted(data.needs_review.items())
     )
 
@@ -261,7 +292,7 @@ def render_html(data: ReportInput, cfg: RoleConfig) -> str:
             )
             items.append(
                 f"<tr><td>{_e(data.name(cid))}</td><td>{reasons}</td>"
-                f'<td><a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a></td></tr>'
+                f"<td>{_links_html(data, cid)}</td></tr>"
             )
         gated_blocks.append(
             f"<h3>{_e(gate)} — {len(by_gate[gate])} candidate(s)</h3>"
@@ -323,6 +354,8 @@ not displaced by later applicants.</p>
 school names — those are redacted before evaluation and re-attached only in this
 report. Every score and every elimination quotes the CV text it rests on; a
 score whose quote could not be found in the CV is zeroed and marked.</p>
+<p>The Trakstar link currently opens the opening's general candidate list rather
+than the individual candidate's record; the Resume link opens the CV file directly.</p>
 <p><strong>Calibration:</strong> {_e(data.calibration_note) or 'not run'}</p>
 <table><tr><th>Criterion</th><th>Max</th></tr>{criteria_rows}</table>
 <table><tr><th>Gate rule</th><th>Value</th></tr>{gate_rows}</table>
@@ -410,6 +443,7 @@ def rows_for_csv(
         row["flags"] = ";".join(assessment.flags)
         row["linkedin_url"] = (precheck.get("linkedin") or {}).get("url") or ""
         row["trakstar_url"] = trakstar_url(data.opening_id, cid)
+        row["resume_url"] = resume_url(candidate) or ""
         row["first_seen_run"] = entry.first_seen_run
         row["status_changed_run"] = entry.status_changed_run
         rows.append(row)
@@ -430,7 +464,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], cfg: RoleConfig) -> None:
     columns = [
         "id", "name", "email", "status", "gate", "final", "fit", "bonus",
         *cfg.criterion_keys(),
-        "penalties", "flags", "linkedin_url", "trakstar_url",
+        "penalties", "flags", "linkedin_url", "trakstar_url", "resume_url",
         "first_seen_run", "status_changed_run",
     ]
     path.parent.mkdir(parents=True, exist_ok=True)

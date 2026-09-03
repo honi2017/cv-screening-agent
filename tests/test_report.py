@@ -11,7 +11,9 @@ from screen.report import (
     _detail_html,
     render_html,
     render_markdown,
+    resume_url,
     rows_for_csv,
+    trakstar_url,
     write_all,
 )
 import screen.report as report_mod
@@ -101,6 +103,11 @@ def _data():
                 "last_name": "Test",
                 "email": f"c{i}@example.com",
                 "created_date": "2026-08-01T10:00:00Z",
+                **(
+                    {"resume": {"file_name": "cv.pdf", "file_url": f"https://example.invalid/resume/{i}"}}
+                    if i == 1
+                    else {}
+                ),
             }
             for i in ids + [6]
         },
@@ -205,6 +212,48 @@ def test_html_links_to_trakstar():
     assert "anduin.hire.trakstar.com" in html
 
 
+def test_trakstar_url_contains_candidate_and_opening_id():
+    url = trakstar_url("704353", 42)
+    assert "42" in url
+    assert "704353" in url
+
+
+def test_resume_url_returns_file_url_when_present():
+    assert resume_url({"resume": {"file_url": "https://example.invalid/r/1"}}) == (
+        "https://example.invalid/r/1"
+    )
+
+
+def test_resume_url_is_none_without_resume():
+    assert resume_url({}) is None
+    assert resume_url({"resume": {}}) is None
+    assert resume_url({"resume": {"file_name": "cv.pdf"}}) is None
+
+
+def test_candidate_with_resume_renders_both_links():
+    html = render_html(_data(), CFG)
+    shortlist_html = html.split("<h2>Shortlist</h2>", 1)[1].split("<h2>Waitlist</h2>", 1)[0]
+    assert ">Resume<" in shortlist_html
+    assert ">Trakstar<" in shortlist_html
+
+
+def test_candidate_without_resume_renders_only_trakstar_link():
+    html = render_html(_data(), CFG)
+    waitlist_html = html.split("<h2>Waitlist</h2>", 1)[1].split("<h2>Gated</h2>", 1)[0]
+    rows = _rows(waitlist_html)
+    cand2_row = next(r for r in rows if "Cand2 Test" in r)
+    assert ">Trakstar<" in cand2_row
+    assert ">Resume<" not in cand2_row
+    assert '<a href=""' not in cand2_row
+
+
+def test_footer_mentions_link_behaviour():
+    html = render_html(_data(), CFG)
+    footer = html.split("<footer>", 1)[1]
+    assert "candidate list" in footer
+    assert "Resume" in footer
+
+
 def _rows(html_fragment):
     """Split an HTML fragment into its top-level <tr>...</tr> chunks."""
     return re.findall(r"<tr[^>]*>.*?</tr>", html_fragment, re.S)
@@ -294,7 +343,10 @@ def test_csv_rows_have_all_columns():
     rows = rows_for_csv(_data(), CFG, statuses=("accepted", "waitlist", "gated"))
     assert rows
     row = rows[0]
-    for column in ("id", "name", "email", "status", "gate", "final", "penalties", "flags", "trakstar_url"):
+    for column in (
+        "id", "name", "email", "status", "gate", "final", "penalties", "flags",
+        "trakstar_url", "resume_url",
+    ):
         assert column in row
     for key in CFG.criterion_keys():
         assert key in row
@@ -339,3 +391,13 @@ def test_write_all_csv_is_parseable(tmp_path):
         rows = list(csv.DictReader(fh))
     assert len(rows) == 1
     assert rows[0]["name"] == "Cand1 Test"
+
+
+def test_write_all_csvs_carry_resume_url_column(tmp_path):
+    paths = Paths(root=tmp_path, opening_id="704353")
+    paths.ensure()
+    written = write_all(_data(), CFG, paths)
+    for key in ("shortlist_csv", "all_csv"):
+        with written[key].open(newline="") as fh:
+            reader = csv.DictReader(fh)
+            assert "resume_url" in reader.fieldnames
