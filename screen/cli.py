@@ -16,6 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from dotenv import load_dotenv
+
 from screen import fetch as fetch_mod
 from screen import report as report_mod
 from screen.config import RoleConfig, load_role
@@ -28,6 +30,46 @@ from screen.verdict import load_verdict, verdict_key
 EXIT_OK, EXIT_ERROR, EXIT_USAGE, EXIT_RUBRIC_CHANGE, EXIT_AUTH = 0, 1, 2, 3, 4
 
 WITHDRAWN_STATES = {"rejected", "hired", "withdrawn", "archived"}
+
+
+def load_dotenv_file(dotenv_path: Path) -> bool:
+    """Load TRAKSTAR_API_KEY / OPENING_ID from `dotenv_path` into os.environ.
+
+    Returns whether the file existed and was loaded. Delegates the actual
+    parsing to python-dotenv rather than hand-rolling one, so comments,
+    blank lines, surrounding whitespace, quoted values, and a value that
+    itself contains "=" are all handled correctly.
+
+    override=False is load_dotenv's default but is spelled out here on
+    purpose: a variable already present in the real environment must win
+    over the .env file (standard dotenv precedence) so CI, cron wrappers,
+    and one-off shell overrides keep working exactly as before. A missing
+    file is not an error -- offline stages (parse/precheck/rank/report)
+    need no key at all, and anyone who exports the variable themselves
+    must keep working unchanged.
+
+    Never logs the values it loads -- only ever returns whether the file
+    was there.
+    """
+    if not dotenv_path.is_file():
+        return False
+    load_dotenv(dotenv_path=dotenv_path, override=False)
+    return True
+
+
+def bootstrap_env() -> None:
+    """Load the project-root .env, before argparse ever reads os.environ.
+
+    This MUST run before build_parser() is constructed below, not merely
+    before the fetch branch runs: --opening's default a few lines down
+    already does `os.environ.get("OPENING_ID", ...)` at parser-construction
+    time, so a fresh shell (or, critically, a cron job with nothing
+    exported) would see an empty environment if the .env load happened any
+    later. "Project root" here is the current working directory, matching
+    --root's own default of "." -- the pipeline is always invoked as
+    `cd <project> && uv run screen ...`.
+    """
+    load_dotenv_file(Path.cwd() / ".env")
 
 
 def run_id_now(now: datetime) -> str:
@@ -458,6 +500,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Must precede build_parser(): --opening's default reads os.environ at
+    # parser-construction time (see build_parser above), so the .env load
+    # has to land before that call, not merely before the fetch branch.
+    bootstrap_env()
     parser = build_parser()
     args = parser.parse_args(argv)
 

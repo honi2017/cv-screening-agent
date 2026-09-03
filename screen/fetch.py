@@ -96,7 +96,10 @@ class TrakstarClient:
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not api_key:
-            raise PermissionError("TRAKSTAR_API_KEY is empty — set it in .env")
+            raise PermissionError(
+                "TRAKSTAR_API_KEY is empty — set it in the project-root .env "
+                "or export it in the environment"
+            )
         self.base_url = base_url.rstrip("/") + "/"
         self._client = client or httpx.Client(timeout=60.0, follow_redirects=True)
         self._auth = (api_key, "")
