@@ -206,6 +206,18 @@ def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
             f"present via {_e(linkedin.get('source'))} — {_e(linkedin.get('url'))}"
             f" — name match: {_e(linkedin.get('name_matches'))}"
         )
+        # "live" is the only liveness verdict ever surfaced here, and only as
+        # positive corroboration -- a 200 means LinkedIn confirms a real,
+        # publicly-visible profile behind this URL. "unknown" (every other
+        # status, a network error, or a timeout -- see
+        # screen.linkedin_check's module docstring) carries no meaning
+        # either way and is deliberately shown as nothing at all: an
+        # ordinary member's profile is private by default and looks
+        # identical, over this check, to one that doesn't exist, so
+        # surfacing "unknown" here would read as unearned doubt about a
+        # real person.
+        if linkedin.get("liveness") == "live":
+            linkedin_detail += " — profile confirmed publicly visible"
     else:
         linkedin_detail = "not found"
     rows.extend(

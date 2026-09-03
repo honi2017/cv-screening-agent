@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from screen.config import load_role
 from screen.rank import apply_gates, assess, compute_penalties, tier2_count
 
@@ -243,57 +245,49 @@ def test_linkedin_unknown_match_is_not_penalised():
     assert compute_penalties(pc, verdict(), CFG) == []
 
 
-# --- Change 1: LinkedIn liveness penalty ------------------------------------
+# --- LinkedIn liveness: the penalty was reversed ----------------------------
 #
-# Separate from, and additional to, no_linkedin (which applies only when
-# there is no usable URL at all -- present=False). A "dead" verdict never
-# suppresses no_linkedin/linkedin_name_mismatch and is never suppressed by
-# them; the two penalties simply stack when both conditions hold.
+# This used to add a `linkedin_dead` penalty whenever `liveness == "dead"`.
+# That verdict was retired (see screen.linkedin_check's module docstring):
+# LinkedIn's HTTP 999 -- the signal "dead" was based on -- is byte-identical
+# for a fabricated slug and for a real profile that simply isn't public. Run
+# against the real 69-candidate pool, treating 999 as "dead" flagged 26 of 54
+# profiles (48%), including the top-ranked candidate, purely for having
+# ordinary privacy settings. compute_penalties must never deduct anything for
+# ANY liveness value -- "live", "unknown", or even a stray legacy "dead"
+# string a precheck cached before this fix shipped. "live" is instead
+# surfaced as positive-only evidence in the report's evidence panel (see
+# screen.report and tests/test_report.py), never as a deduction.
 
 
-def test_linkedin_dead_is_penalised():
-    pc = precheck(
-        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "dead"}
-    )
-    pens = compute_penalties(pc, verdict(), CFG)
-    dead = [p for p in pens if p["kind"] == "linkedin_dead"]
-    assert len(dead) == 1
-    # read the value from config, per the same policy-dial reasoning as
-    # no_linkedin above.
-    assert dead[0]["points"] == CFG.penalties["linkedin_dead"]
+@pytest.mark.parametrize("liveness", ["live", "unknown", "dead", None])
+def test_linkedin_liveness_never_produces_a_penalty(liveness):
+    linkedin = {"present": True, "source": "cv", "url": "u", "name_matches": True}
+    if liveness is not None:
+        linkedin["liveness"] = liveness
+    pc = precheck(linkedin=linkedin)
+    kinds = {p["kind"] for p in compute_penalties(pc, verdict(), CFG)}
+    assert "linkedin_dead" not in kinds
 
 
-def test_linkedin_live_is_not_penalised():
-    pc = precheck(
-        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "live"}
-    )
-    assert not any(p["kind"] == "linkedin_dead" for p in compute_penalties(pc, verdict(), CFG))
+def test_linkedin_liveness_never_produces_a_flag_chip():
+    for liveness in ("live", "unknown", "dead"):
+        pc = precheck(
+            linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": liveness}
+        )
+        a = assess(pc, verdict(), CFG)
+        assert "LinkedIn dead" not in a.flags
 
 
-def test_linkedin_unknown_liveness_is_not_penalised():
-    # The critical safety property from screen.linkedin_check: "unknown" (a
-    # network error, a timeout, or an ambiguous status code) must never be
-    # treated as "probably dead".
-    pc = precheck(
-        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "unknown"}
-    )
-    assert not any(p["kind"] == "linkedin_dead" for p in compute_penalties(pc, verdict(), CFG))
-
-
-def test_linkedin_dead_penalty_stacks_with_name_mismatch():
+def test_linkedin_dead_liveness_still_stacks_with_name_mismatch_penalty():
+    # A liveness value never suppresses -- or is suppressed by --
+    # linkedin_name_mismatch; that penalty is orthogonal and keyed on
+    # name_matches alone.
     pc = precheck(
         linkedin={"present": True, "source": "cv", "url": "u", "name_matches": False, "liveness": "dead"}
     )
     kinds = {p["kind"] for p in compute_penalties(pc, verdict(), CFG)}
-    assert {"linkedin_name_mismatch", "linkedin_dead"} <= kinds
-
-
-def test_linkedin_dead_produces_flag_chip():
-    pc = precheck(
-        linkedin={"present": True, "source": "cv", "url": "u", "name_matches": True, "liveness": "dead"}
-    )
-    a = assess(pc, verdict(), CFG)
-    assert "LinkedIn dead" in a.flags
+    assert kinds == {"linkedin_name_mismatch"}
 
 
 def test_tier2_penalties_charged_per_signal():

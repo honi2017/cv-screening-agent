@@ -347,6 +347,42 @@ def test_evidence_panel_shows_linkedin_url():
     assert "https://linkedin.com/in/x" in html
 
 
+# --- LinkedIn liveness in the evidence panel: positive-only ----------------
+#
+# "live" (an HTTP 200 -- LinkedIn confirms a real, publicly-visible profile)
+# is genuine corroborating evidence and must be shown. "unknown" (999, 405,
+# any other status, a network error, or a timeout) means LinkedIn's bot-wall
+# answered, which is indistinguishable between a fabricated slug and a real
+# profile that simply isn't public -- see screen.linkedin_check's module
+# docstring. It carries no meaning either way, so it must render as nothing
+# at all: showing anything for "unknown" would read as unearned doubt about
+# a real person.
+
+
+def test_evidence_panel_shows_confirmation_when_linkedin_live():
+    data = _data()
+    data.prechecks[1]["linkedin"]["liveness"] = "live"
+    detail = _detail_html(data, 1, CFG)
+    assert "profile confirmed publicly visible" in detail
+
+
+def test_evidence_panel_shows_nothing_extra_when_linkedin_unknown():
+    data = _data()
+    data.prechecks[1]["linkedin"]["liveness"] = "unknown"
+    detail = _detail_html(data, 1, CFG)
+    assert "profile confirmed publicly visible" not in detail
+    # The base LinkedIn line (source, URL, name match) must still render --
+    # "unknown" suppresses only the extra confirmation clause, not the line.
+    assert "<dt>LinkedIn</dt>" in detail
+
+
+def test_evidence_panel_shows_nothing_extra_when_liveness_absent():
+    # No liveness field at all (e.g. the config flag was off for this run)
+    # must behave exactly like "unknown": no confirmation clause.
+    detail = _detail_html(_data(), 1, CFG)
+    assert "profile confirmed publicly visible" not in detail
+
+
 def test_footer_mentions_link_behaviour():
     """The footer must explain what each link opens, and warn about the CV link.
 

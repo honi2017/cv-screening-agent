@@ -315,21 +315,22 @@ def test_build_precheck_records_linkedin_liveness_verdict(pdfs):
 
 
 def test_build_precheck_reuses_cached_liveness_for_unchanged_url(pdfs):
-    # The cached verdict is "dead" but a live client would answer 200 (live)
-    # -- if the cache were ignored, the result below would flip to "live".
+    # The cached verdict is "unknown" but a live client would answer 200
+    # (live) -- if the cache were ignored, the result below would flip to
+    # "live".
     client, calls = _counting_client(200)
-    previous = {"linkedin": {"url": "https://linkedin.com/in/alexmorgan", "liveness": "dead"}}
+    previous = {"linkedin": {"url": "https://linkedin.com/in/alexmorgan", "liveness": "unknown"}}
     p, _redacted = build_precheck(
         CANDIDATE, parse_pdf(pdfs["clean"]), CFG, TODAY, [],
         previous=previous, linkedin_client=client,
     )
-    assert p["linkedin"]["liveness"] == "dead"
+    assert p["linkedin"]["liveness"] == "unknown"
     assert calls["n"] == 0
 
 
 def test_build_precheck_rechecks_liveness_when_url_changed(pdfs):
     client, calls = _counting_client(200)
-    previous = {"linkedin": {"url": "https://linkedin.com/in/someone-else", "liveness": "dead"}}
+    previous = {"linkedin": {"url": "https://linkedin.com/in/someone-else", "liveness": "unknown"}}
     p, _redacted = build_precheck(
         CANDIDATE, parse_pdf(pdfs["clean"]), CFG, TODAY, [],
         previous=previous, linkedin_client=client,
@@ -361,8 +362,9 @@ def test_run_stage_does_not_recheck_linkedin_when_url_unchanged(tmp_path, pdfs):
     assert payload["linkedin"]["liveness"] == "live"
 
     # A forced rebuild with the SAME URL must reuse the cached verdict, not
-    # re-request -- proven by a client that would flip the answer to "dead"
-    # if it were called.
+    # re-request -- proven by a client that would flip the answer to
+    # "unknown" if it were called (999 no longer maps to "dead"; see
+    # screen.linkedin_check's module docstring).
     client2, calls2 = _counting_client(999)
     run_stage(paths, CFG, TODAY, force=True, linkedin_client=client2)
     assert calls2["n"] == 0
@@ -387,4 +389,7 @@ def test_run_stage_rechecks_linkedin_when_url_changed(tmp_path, pdfs):
     run_stage(paths, CFG, TODAY, force=True, linkedin_client=client2)
     assert calls2["n"] == 1
     payload = json.loads((paths.prechecks / "1.json").read_text())
-    assert payload["linkedin"]["liveness"] == "dead"
+    # 999 maps to "unknown", never "dead" -- see screen.linkedin_check's
+    # module docstring. What this test actually proves is that the fresh
+    # check ran and its result (not the stale cached "live") was stored.
+    assert payload["linkedin"]["liveness"] == "unknown"

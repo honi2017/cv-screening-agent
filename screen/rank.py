@@ -151,23 +151,18 @@ def compute_penalties(
             }
         )
 
-    # Separate from, and additional to, no_linkedin/linkedin_name_mismatch
-    # above -- a candidate can supply a well-formed URL (so `present` is
-    # True and no_linkedin never fires) that nonetheless doesn't resolve to
-    # a real profile. Only "dead" is ever penalised here: "live" adds
-    # nothing, and "unknown" (network error, timeout, or an ambiguous
-    # status code) MUST add nothing either -- see screen.linkedin_check's
-    # module docstring for why treating "unknown" as "probably dead" would
-    # be unsafe at scale.
-    if linkedin.get("liveness") == "dead":
-        out.append(
-            {
-                "kind": "linkedin_dead",
-                "points": p["linkedin_dead"],
-                "detail": f"LinkedIn profile does not resolve ({linkedin.get('url')})",
-            }
-        )
-
+    # A `liveness` penalty deliberately does NOT exist here. This check used
+    # to add a `linkedin_dead` penalty when `liveness == "dead"`; that verdict
+    # itself has been retired (see screen.linkedin_check's module docstring)
+    # because LinkedIn's HTTP 999 -- the signal "dead" was based on -- turned
+    # out to be byte-identical for a fabricated slug and for a real profile
+    # that simply isn't public. Run against the real pool it flagged 26 of 54
+    # candidates (48%) as "dead", including the top-ranked candidate, purely
+    # for having ordinary privacy settings. `"live"` is real, positive
+    # evidence and is surfaced in the report's evidence panel (see
+    # screen.report); `"unknown"` carries no meaning either way and must
+    # never cost a candidate anything. Do not reintroduce a penalty keyed on
+    # `liveness` without a measurement as solid as the one that killed this.
     for flag in _judge_flags(verdict, 2):
         out.append(
             {
@@ -232,7 +227,6 @@ def compute_penalties(
 _FLAG_CHIPS = {
     "no_linkedin": "no LinkedIn",
     "linkedin_name_mismatch": "LinkedIn mismatch",
-    "linkedin_dead": "LinkedIn dead",
     "pool_duplicate": "template dup",
     "years_4_to_5": "4-5 yrs",
     "no_degree": "no degree",

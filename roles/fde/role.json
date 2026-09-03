@@ -73,7 +73,6 @@
   "penalties": {
     "no_linkedin": 20,
     "linkedin_name_mismatch": 8,
-    "linkedin_dead": 10,
     "tier2_signal": 10,
     "pool_duplicate": 10,
     "years_4_to_5": 10,
