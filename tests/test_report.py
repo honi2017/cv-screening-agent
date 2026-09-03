@@ -212,6 +212,24 @@ def test_html_links_to_trakstar():
     assert "anduin.hire.trakstar.com" in html
 
 
+def test_every_link_opens_in_a_new_tab_with_noopener():
+    """Links must open in a new tab and must not hand the opener window over.
+
+    A reviewer works down a long list; a same-tab navigation loses their place.
+    `noopener` denies the opened page a window.opener reference back to the
+    report, and `noreferrer` keeps this page's location out of the referrer --
+    the report is a local file containing applicant PII and the resume link is
+    an unauthenticated token URL, so neither should leak onward.
+    """
+    html = render_html(_data(), CFG)
+    anchors = re.findall(r"<a\s[^>]*>(?:Trakstar|Resume)</a>", html)
+    assert anchors, "expected Trakstar/Resume links in the report"
+    for a in anchors:
+        assert 'target="_blank"' in a, a
+        assert "noopener" in a, a
+        assert "noreferrer" in a, a
+
+
 def test_trakstar_url_matches_the_confirmed_live_route_exactly():
     """Pin the deep-link route against a URL read off the live Trakstar UI.
 

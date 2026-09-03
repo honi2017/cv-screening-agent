@@ -122,11 +122,21 @@ footer table { max-width:760px; }
 """
 
 
+# Every outbound link opens in a new tab, so a reviewer working down the list
+# never loses their place in the report. `noopener` denies the opened page a
+# window.opener handle back to this one, and `noreferrer` stops this page's
+# location leaking as a referrer — worth having when the report is a local file
+# full of applicant PII and the resume link is an unauthenticated token URL.
+_NEW_TAB = 'target="_blank" rel="noopener noreferrer"'
+
+
 def _links_html(data: ReportInput, cid: int) -> str:
-    links = [f'<a href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a>']
+    links = [
+        f'<a {_NEW_TAB} href="{_e(trakstar_url(data.opening_id, cid))}">Trakstar</a>'
+    ]
     url = resume_url(data.candidates.get(cid, {}))
     if url:
-        links.append(f'<a href="{_e(url)}">Resume</a>')
+        links.append(f'<a {_NEW_TAB} href="{_e(url)}">Resume</a>')
     return f'<span class="links">{"".join(links)}</span>'
 
 
