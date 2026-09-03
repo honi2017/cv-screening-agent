@@ -2,18 +2,46 @@
   "position_title": "Forward Deployed Engineer, Engineering",
   "rubric_version": 4,
   "precheck_rules_version": 2,
-  "cap_fraction": 0.20,
+  "cap_fraction": 0.2,
   "quality_floor_delta": 5,
   "calibration_window": 5,
   "bonus_max": 5,
   "criteria": [
-    {"key": "production_ownership", "label": "Production engineering ownership", "max": 25},
-    {"key": "integration_breadth", "label": "Integration breadth", "max": 20},
-    {"key": "client_solutioning", "label": "Client-facing solutioning", "max": 20},
-    {"key": "communication_product", "label": "Communication & product sense", "max": 15},
-    {"key": "domain", "label": "Domain", "max": 10},
-    {"key": "ai_tooling", "label": "AI/LLM tooling", "max": 5},
-    {"key": "distributed_collab", "label": "Distributed / offshore collaboration", "max": 5}
+    {
+      "key": "production_ownership",
+      "label": "Production engineering ownership",
+      "max": 25
+    },
+    {
+      "key": "integration_breadth",
+      "label": "Integration breadth",
+      "max": 20
+    },
+    {
+      "key": "client_solutioning",
+      "label": "Client-facing solutioning",
+      "max": 20
+    },
+    {
+      "key": "communication_product",
+      "label": "Communication & product sense",
+      "max": 15
+    },
+    {
+      "key": "domain",
+      "label": "Domain",
+      "max": 10
+    },
+    {
+      "key": "ai_tooling",
+      "label": "AI/LLM tooling",
+      "max": 5
+    },
+    {
+      "key": "distributed_collab",
+      "label": "Distributed / offshore collaboration",
+      "max": 5
+    }
   ],
   "anchors": {
     "none": 0.0,
@@ -30,13 +58,19 @@
     "pool_dup_tier1_count": 4,
     "skills_count_threshold": 80,
     "metadata_template_producers": [
-      "canva", "resume.io", "zety", "kickresume", "novoresume", "enhancv", "flowcv"
+      "canva",
+      "resume.io",
+      "zety",
+      "kickresume",
+      "novoresume",
+      "enhancv",
+      "flowcv"
     ],
     "metadata_minutes_threshold": 30,
     "min_text_chars": 200
   },
   "penalties": {
-    "no_linkedin": 8,
+    "no_linkedin": 20,
     "linkedin_name_mismatch": 8,
     "tier2_signal": 5,
     "pool_duplicate": 10,
@@ -44,5 +78,8 @@
     "no_degree": 5,
     "short_stints": 5
   },
-  "tiebreak_timezones": ["ET", "CT"]
+  "tiebreak_timezones": [
+    "ET",
+    "CT"
+  ]
 }

@@ -34,7 +34,10 @@ def test_scalars_load():
     assert cfg.rubric_version == 4
     assert cfg.precheck_rules_version == 2
     assert cfg.gates["min_years"] == 4
-    assert cfg.penalties["no_linkedin"] == 8
+    # Hiring-policy value, deliberately set to 20 (raised from 8) so a missing
+    # verifiable profile is decisive rather than symbolic: measured against the
+    # real pool, anything below -20 changed the shortlist not at all.
+    assert cfg.penalties["no_linkedin"] == 20
 
 
 def test_criterion_lookup():

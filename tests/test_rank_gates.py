@@ -227,7 +227,9 @@ def test_no_linkedin_penalty():
     pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
     pens = compute_penalties(pc, verdict(), CFG)
     assert [p["kind"] for p in pens] == ["no_linkedin"]
-    assert pens[0]["points"] == 8
+    # read the value from config: it is a hiring-policy dial the team tunes,
+    # so the number must live in role.json only, never duplicated here.
+    assert pens[0]["points"] == CFG.penalties["no_linkedin"]
 
 
 def test_linkedin_name_mismatch_penalty():
@@ -285,16 +287,18 @@ def test_short_stints_below_threshold_not_penalised():
 
 def test_assess_computes_final_score():
     # verdict() scores 10 on every criterion with max >= 10, 2 on the rest --
-    # derive the expected fit from CFG rather than hardcode a number tied to
-    # one particular criteria split (role.json's high/low mix is config, not
-    # a fixed shape this test should assume). Penalties 8 (no linkedin); bonus 3.
+    # Derive both the expected fit and the expected penalty from CFG rather
+    # than hardcoding them: the criteria split and the penalty weights are both
+    # config the team tunes, and a duplicated literal here would silently
+    # contradict role.json the moment either is changed.
     pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
     expected_fit = float(sum(10 if CFG.criterion(k).max >= 10 else 2 for k in CFG.criterion_keys()))
+    expected_pen = float(CFG.penalties["no_linkedin"])
     a = assess(pc, verdict(bonus=3.0), CFG)
     assert a.fit == expected_fit
     assert a.bonus == 3.0
-    assert a.penalty_total == 8.0
-    assert a.final == round(expected_fit + 3.0 - 8.0, 2)
+    assert a.penalty_total == expected_pen
+    assert a.final == round(expected_fit + 3.0 - expected_pen, 2)
     assert a.gate is None
     assert "no LinkedIn" in a.flags
 
@@ -347,7 +351,7 @@ def test_broad_claims_and_no_linkedin_produces_flag():
     assert a.gate is None
     assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
     # The no-LinkedIn penalty still applies; the flag itself adds nothing.
-    assert a.penalty_total == 8.0
+    assert a.penalty_total == float(CFG.penalties["no_linkedin"])
 
 
 def test_six_of_seven_and_tier2_signal_produces_flag():
