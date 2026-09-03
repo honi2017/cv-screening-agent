@@ -187,6 +187,12 @@ def build_precheck(
         "linkedin": linkedin,
         "degree": signals.find_degree(md),
         "location": signals.find_location(md, profile_data),
+        # Reference-only (see screen.rank._reference_flags and the long
+        # comment in screen.signals.find_offshore_claims) -- always computed,
+        # since detection is pure and cheap; role.json's
+        # reference_flags.offshore_claim key decides only whether assess()
+        # surfaces it, never whether this is collected.
+        "offshore_claims": signals.find_offshore_claims(md),
         "redaction": {
             "tokens_replaced": redaction.tokens_replaced,
             "kinds": redaction.kinds,

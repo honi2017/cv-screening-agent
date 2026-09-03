@@ -21,7 +21,7 @@ import screen.report as report_mod
 CFG = load_role(Path(__file__).resolve().parents[1] / "roles" / "fde")
 
 
-def _assessment(cid, final, gate=None, flags=(), penalties=()):
+def _assessment(cid, final, gate=None, flags=(), penalties=(), reference_flags=()):
     return Assessment(
         candidate_id=cid,
         gate=gate,
@@ -34,6 +34,7 @@ def _assessment(cid, final, gate=None, flags=(), penalties=()):
         flags=list(flags),
         tier2_count=0.0,
         timezone_hint="ET",
+        reference_flags=list(reference_flags),
     )
 
 
@@ -190,6 +191,57 @@ def test_html_shows_gate_reason_quotes():
 def test_html_shows_flag_chips():
     html = render_html(_data(), CFG)
     assert "no LinkedIn" in html
+
+
+# --- Reference flags: shown, but never as a demerit -------------------------
+#
+# Reference flags (screen.rank.Assessment.reference_flags) carry no score
+# effect at all -- see the field comment there and
+# tests/test_rank_gates.py's zero-effect test. The report's job is only to
+# render them in their own neutral group, separate from the penalty-derived
+# chips, and to render nothing at all for a candidate who has none.
+
+def test_html_shows_both_reference_flags_in_their_own_group():
+    data = _data()
+    data.assessments[1] = _assessment(
+        1,
+        82.0,
+        reference_flags=[
+            {
+                "kind": "offshore_claim",
+                "label": "offshore/nearshore claim (for reference)",
+                "detail": "1 sentence(s) claim collaboration with a geographically separated team",
+                "sentences": [
+                    "Collaborated with offshore engineering teams in Vietnam to "
+                    "design and deploy integration APIs."
+                ],
+                "places": ["vietnam"],
+            },
+            {
+                "kind": "full_criteria_coverage",
+                "label": "claims 7/7 criteria",
+                "detail": "scored at or above 60% of max on 7 of 7 rubric criteria",
+            },
+        ],
+    )
+    html = render_html(data, CFG)
+    assert 'class="ref-group"' in html
+    assert "for reference" in html.lower()
+    assert "no score effect" in html.lower()
+    assert "offshore/nearshore claim (for reference)" in html
+    assert "claims 7/7 criteria" in html
+    # The offshore claim's evidence panel quotes the sentence verbatim -- the
+    # sentence IS the point of that flag.
+    assert "Collaborated with offshore engineering teams in Vietnam" in html
+
+
+def test_html_omits_reference_group_entirely_when_none_present():
+    # _data()'s default assessments all carry reference_flags=[] (see
+    # _assessment's default), so the whole page must show no trace of the
+    # reference-group markup at all -- not an empty group, no group.
+    html = render_html(_data(), CFG)
+    assert 'class="ref-group"' not in html
+    assert "for reference" not in html.lower()
 
 
 def test_html_shows_per_criterion_quotes_in_detail():

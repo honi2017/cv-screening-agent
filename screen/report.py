@@ -105,6 +105,11 @@ tr.grey td { color:var(--muted); }
 .chip { display:inline-block; background:var(--chip); border-radius:10px; padding:1px 7px;
         margin:0 3px 3px 0; font-size:11px; color:var(--warn); white-space:nowrap; }
 .chip.bad { color:var(--bad); }
+/* Reference flags: neutral, not warning-colored -- these never cost a point
+   and must never read as a demerit next to the chips above. */
+.ref-group { margin-top:4px; }
+.ref-tag { color:var(--muted); font-size:11px; margin-right:5px; }
+.chip.ref { color:var(--muted); border:1px solid var(--line); background:transparent; }
 details { margin:4px 0; } summary { cursor:pointer; color:var(--accent); font-size:12px; }
 .detail-row td { padding-top:0; padding-bottom:0; border-bottom:none; }
 .detail { background:#fafafa; border:1px solid var(--line); border-radius:6px;
@@ -163,6 +168,23 @@ def _bars_html(verdict: dict[str, Any], cfg: RoleConfig) -> str:
     return f'<div class="bars">{"".join(parts)}</div>'
 
 
+def _reference_html(assessment: Assessment) -> str:
+    """Reference flags render in their own neutrally-styled group, separate
+    from the penalty-derived chips in the Flags column -- see the
+    `reference_flags` field comment on `screen.rank.Assessment`. They never
+    affect `final`/status (compute_penalties never produces these kinds), and
+    when a candidate has none this returns "" -- no group, no placeholder,
+    nothing -- so a clean candidate's row carries no trace of it at all.
+    """
+    if not assessment.reference_flags:
+        return ""
+    chips = "".join(
+        f'<span class="chip ref" title="{_e(rf.get("detail"))}">{_e(rf.get("label", rf["kind"]))}</span>'
+        for rf in assessment.reference_flags
+    )
+    return f'<div class="ref-group"><span class="ref-tag">for reference — no score effect</span>{chips}</div>'
+
+
 def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
     verdict = data.verdicts.get(cid, {})
     precheck = data.prechecks.get(cid, {})
@@ -191,6 +213,17 @@ def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
     for pen in assessment.penalties:
         rows.append(
             f"<dt>Penalty −{_e(pen['points'])} — {_e(pen['kind'])}</dt><dd>{_e(pen['detail'])}</dd>"
+        )
+
+    # Reference flags: deliberately worded "For reference", never "Flag" or
+    # "Penalty", and carry no points -- see the `reference_flags` field
+    # comment on screen.rank.Assessment. `sentences`, when present (the
+    # offshore_claim kind), is the whole point of that flag, so it is quoted
+    # verbatim exactly like a judge's evidence quote above.
+    for rf in assessment.reference_flags:
+        quotes = "".join(f"<blockquote>{_e(s)}</blockquote>" for s in rf.get("sentences") or [])
+        rows.append(
+            f"<dt>For reference — {_e(rf['kind'])}</dt><dd>{quotes}{_e(rf.get('detail'))}</dd>"
         )
 
     years = precheck.get("years_experience") or {}
@@ -290,7 +323,7 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
             f'<td class="score">{assessment.final:g}</td>'
             f"<td>{_bars_html(data.verdicts[cid], cfg)}</td>"
             f"<td>{penalties}</td>"
-            f"<td>{chips or '—'}</td>"
+            f"<td>{chips or '—'}{_reference_html(assessment)}</td>"
             f"<td>{_links_html(data, cid)}</td>"
             "</tr>"
         )

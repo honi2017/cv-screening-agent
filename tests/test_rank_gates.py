@@ -1,9 +1,10 @@
+import dataclasses
 from pathlib import Path
 
 import pytest
 
 from screen.config import load_role
-from screen.rank import apply_gates, assess, compute_penalties, tier2_count
+from screen.rank import apply_gates, assess, compute_penalties, rank_and_cut, tier2_count
 
 CFG = load_role(Path(__file__).resolve().parents[1] / "roles" / "fde")
 
@@ -450,6 +451,153 @@ def test_broad_claims_penalty_value_read_from_config():
     broad = [p for p in pens if p["kind"] == "broad_claims"]
     assert len(broad) == 1
     assert broad[0]["points"] == CFG.penalties["broad_claims"]
+
+
+# --- Reference flags: no score effect, ever -------------------------------
+#
+# See screen.rank._reference_flags for the full rationale. A reference flag
+# is shown on the report for a human to eyeball and must NEVER affect a
+# score: not produced by compute_penalties, never able to gate/eliminate/
+# reorder anyone. The hiring manager's own words: "Just have a flagging, no
+# points should be affected. Just for reference."
+
+_OFFSHORE_SENTENCE = (
+    "Collaborated with offshore engineering teams in Vietnam to design and "
+    "deploy integration APIs."
+)
+
+
+def test_offshore_claim_reference_flag_fires_with_verbatim_sentence_and_places():
+    pc = precheck(offshore_claims=[{"sentence": _OFFSHORE_SENTENCE, "places": ["vietnam"]}])
+    a = assess(pc, verdict(), CFG)
+    rf = next((f for f in a.reference_flags if f["kind"] == "offshore_claim"), None)
+    assert rf is not None
+    assert _OFFSHORE_SENTENCE in rf["sentences"]
+    assert "vietnam" in rf["places"]
+
+
+def test_offshore_claim_reference_flag_absent_without_any_claim():
+    a = assess(precheck(), verdict(), CFG)
+    assert not any(f["kind"] == "offshore_claim" for f in a.reference_flags)
+
+
+def test_full_criteria_coverage_fires_on_broad_and_clean():
+    # All seven criteria at max, verifiable LinkedIn present, no Tier-2
+    # signal -- the exact case that currently escapes notice: broad_claims
+    # requires no-LinkedIn or a Tier-2 signal, neither of which applies here.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+    rf = next((f for f in a.reference_flags if f["kind"] == "full_criteria_coverage"), None)
+    assert rf is not None
+    total = len(CFG.criterion_keys())
+    assert rf["label"] == f"claims {total}/{total} criteria"
+
+
+def test_full_criteria_coverage_does_not_fire_when_broad_claims_penalty_fires():
+    # Same breadth, but no verifiable LinkedIn -- broad_claims fires, so this
+    # situation is already visible and scored; the reference flag must not
+    # also fire (it exists for the case the penalty does NOT catch).
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert any(p["kind"] == "broad_claims" for p in a.penalties)
+    assert not any(f["kind"] == "full_criteria_coverage" for f in a.reference_flags)
+
+
+def test_full_criteria_coverage_does_not_fire_on_narrow_candidate():
+    keys = CFG.criterion_keys()
+    scores = {k: CFG.criterion(k).max for k in keys}
+    scores[keys[-1]] = 0
+    scores[keys[-2]] = 0
+    a = assess(precheck(), verdict(scores=scores), CFG)
+    assert not any(f["kind"] == "full_criteria_coverage" for f in a.reference_flags)
+
+
+def test_reference_flag_kinds_never_appear_in_compute_penalties():
+    # Fire both underlying conditions at once and confirm compute_penalties
+    # -- the ONLY function whose output can cost a candidate a point -- never
+    # produces either kind, under any circumstance.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(offshore_claims=[{"sentence": _OFFSHORE_SENTENCE, "places": ["vietnam"]}])
+    pens = compute_penalties(pc, verdict(scores=scores), CFG)
+    kinds = {p["kind"] for p in pens}
+    assert "offshore_claim" not in kinds
+    assert "full_criteria_coverage" not in kinds
+
+
+def test_offshore_claim_config_key_disables_the_flag():
+    cfg = dataclasses.replace(
+        CFG, reference_flags={**CFG.reference_flags, "offshore_claim": False}
+    )
+    pc = precheck(offshore_claims=[{"sentence": _OFFSHORE_SENTENCE, "places": ["vietnam"]}])
+    a = assess(pc, verdict(), cfg)
+    assert not any(f["kind"] == "offshore_claim" for f in a.reference_flags)
+
+
+def test_full_criteria_coverage_config_key_disables_the_flag():
+    cfg = dataclasses.replace(
+        CFG, reference_flags={**CFG.reference_flags, "full_criteria_coverage": False}
+    )
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    a = assess(precheck(), verdict(scores=scores), cfg)
+    assert not any(f["kind"] == "full_criteria_coverage" for f in a.reference_flags)
+
+
+def test_reference_flags_never_change_final_score_or_status():
+    """The hard constraint: build a candidate that fires BOTH reference
+    flags, and confirm `final` and the ledger `status` it ends up with are
+    byte-identical to an otherwise identical candidate with both flags
+    suppressed via config. If this test ever fails, a reference flag has
+    stopped being reference-only.
+    """
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(offshore_claims=[{"sentence": _OFFSHORE_SENTENCE, "places": ["vietnam"]}])
+    v = verdict(scores=scores)
+
+    cfg_on = CFG  # roles/fde/role.json ships both reference_flags keys true
+    cfg_off = dataclasses.replace(
+        CFG, reference_flags={"offshore_claim": False, "full_criteria_coverage": False}
+    )
+
+    with_flags = assess(pc, v, cfg_on)
+    without_flags = assess(pc, v, cfg_off)
+
+    # Sanity check that this test actually exercises both flags -- otherwise
+    # the equality assertions below would be vacuous.
+    assert {f["kind"] for f in with_flags.reference_flags} == {
+        "offshore_claim",
+        "full_criteria_coverage",
+    }
+    assert without_flags.reference_flags == []
+
+    assert with_flags.final == without_flags.final
+    assert with_flags.penalty_total == without_flags.penalty_total
+    assert with_flags.gate == without_flags.gate
+    assert with_flags.penalties == without_flags.penalties
+
+    # And the status a full ranking run assigns is identical too -- not just
+    # the raw score in isolation. Four low-scoring filler candidates (same
+    # in both runs) push this candidate to a clean top-of-pool "accepted"
+    # in both scenarios, so the comparison isn't a vacuous "both waitlisted".
+    fillers_on = {i: assess(precheck(candidate_id=i), verdict(), cfg_on) for i in range(2, 6)}
+    fillers_off = {i: assess(precheck(candidate_id=i), verdict(), cfg_off) for i in range(2, 6)}
+
+    result_with = rank_and_cut({1: with_flags, **fillers_on}, {}, CFG, "run-ref-on", {}, set())
+    result_without = rank_and_cut(
+        {1: without_flags, **fillers_off}, {}, CFG, "run-ref-off", {}, set()
+    )
+
+    def status_of(cid: int, result) -> str:
+        if cid in result.accepted:
+            return "accepted"
+        if cid in result.waitlist:
+            return "waitlist"
+        if cid in result.gated:
+            return "gated"
+        return "unknown"
+
+    assert status_of(1, result_with) == status_of(1, result_without) == "accepted"
 
 
 def test_assess_needs_sponsorship_flag_no_score_effect_no_elimination():

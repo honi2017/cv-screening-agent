@@ -29,6 +29,11 @@ class Assessment:
     tier2_count: float
     timezone_hint: str
     quote_warnings: list[str] = field(default_factory=list)
+    # Reference-only flags (screen.rank._reference_flags): shown on the
+    # report for a human to eyeball, never read by compute_penalties and
+    # never able to move `final` or `gate`/status -- see the module comment
+    # above `_reference_flags` for why that separation is load-bearing.
+    reference_flags: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _judge_flags(verdict: dict[str, Any], tier: int) -> list[dict[str, Any]]:
@@ -248,6 +253,19 @@ def _high_scoring_criteria_count(verdict: dict[str, Any], cfg: RoleConfig) -> in
     return count
 
 
+def _broad_coverage(verdict: dict[str, Any], cfg: RoleConfig) -> bool:
+    """True when the judge scored at or above 60% of max on nearly every
+    rubric criterion (all but at most one). Factored out of
+    `_broad_claims_uncorroborated` so the `full_criteria_coverage` reference
+    flag (see `_reference_flags`) reuses the exact same arithmetic instead of
+    duplicating it -- the two must never be able to disagree about what
+    counts as "broad".
+    """
+    total_criteria = len(cfg.criterion_keys())
+    high_scoring = _high_scoring_criteria_count(verdict, cfg)
+    return high_scoring >= total_criteria - 1
+
+
 def _broad_claims_uncorroborated(
     precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
 ) -> bool:
@@ -259,12 +277,91 @@ def _broad_claims_uncorroborated(
     penalty (compute_penalties) and the matching report flag (assess) so the
     two can never disagree about which candidates it applies to.
     """
-    total_criteria = len(cfg.criterion_keys())
-    high_scoring = _high_scoring_criteria_count(verdict, cfg)
-    broad = high_scoring >= total_criteria - 1
+    broad = _broad_coverage(verdict, cfg)
     linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
     uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
     return broad and uncorroborated
+
+
+# --- Reference flags ---------------------------------------------------------
+#
+# A reference flag is shown on the report for a human to eyeball and NEVER
+# affects a score: it is not produced by `compute_penalties`, it cannot gate,
+# eliminate, or reorder anyone, and adding one leaves every candidate's
+# `final` and status byte-identical (see
+# tests/test_rank_gates.py::test_reference_flags_never_change_score_or_status
+# for the test that locks this down directly). The hiring manager's own
+# words: "Just have a flagging, no points should be affected. Just for
+# reference." Each flag below is gated behind its own role.json
+# `reference_flags.<kind>` key so either can be switched off with no code
+# change (default enabled -- see RoleConfig.reference_flag_enabled).
+
+
+def _offshore_claim_reference(precheck: dict[str, Any], cfg: RoleConfig) -> dict[str, Any] | None:
+    if not cfg.reference_flag_enabled("offshore_claim"):
+        return None
+    claims = precheck.get("offshore_claims") or []
+    if not claims:
+        return None
+    sentences = [c["sentence"] for c in claims]
+    places = sorted({p for c in claims for p in (c.get("places") or [])})
+    return {
+        "kind": "offshore_claim",
+        "label": "offshore/nearshore claim (for reference)",
+        "detail": (
+            f"{len(sentences)} sentence(s) claim collaboration with a geographically "
+            "separated team -- unverifiable (see code comment), shown for reference "
+            "only; the resume link above names the employer"
+        ),
+        "sentences": sentences,
+        "places": places,
+    }
+
+
+def _full_criteria_coverage_reference(
+    precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
+) -> dict[str, Any] | None:
+    """Fires when the candidate scores broadly (see `_broad_coverage`) AND the
+    `broad_claims` penalty did NOT already fire for them.
+
+    Rationale: when the penalty fires, the situation is already both visible
+    (the "broad claims, uncorroborated" chip) and scored -- a human reviewing
+    the report has no reason to need this too. This flag exists specifically
+    for the case that currently escapes notice entirely: broad coverage on an
+    otherwise-clean candidate, which slips past `broad_claims` because that
+    penalty additionally requires no verifiable LinkedIn or at least one
+    Tier-2 signal. A candidate scoring on every criterion with a clean profile
+    and zero flags is either a genuinely excellent match or a well-executed
+    rewrite of the job description, and no amount of document analysis tells
+    those apart -- that's an interview question, not a scoring question,
+    which is exactly why this is reference-only.
+    """
+    if not cfg.reference_flag_enabled("full_criteria_coverage"):
+        return None
+    if not _broad_coverage(verdict, cfg):
+        return None
+    if _broad_claims_uncorroborated(precheck, verdict, cfg):
+        return None
+    total = len(cfg.criterion_keys())
+    high = _high_scoring_criteria_count(verdict, cfg)
+    return {
+        "kind": "full_criteria_coverage",
+        "label": f"claims {high}/{total} criteria",
+        "detail": (
+            f"scored at or above 60% of max on {high} of {total} rubric criteria "
+            "with nothing else flagged -- an interview question, not a scoring one"
+        ),
+    }
+
+
+def _reference_flags(
+    precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
+) -> list[dict[str, Any]]:
+    flags = [
+        _offshore_claim_reference(precheck, cfg),
+        _full_criteria_coverage_reference(precheck, verdict, cfg),
+    ]
+    return [f for f in flags if f is not None]
 
 
 def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -> Assessment:
@@ -352,6 +449,7 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
         tier2_count=tier2_count(precheck, verdict, cfg),
         timezone_hint=str(location.get("timezone_hint") or "unknown"),
         quote_warnings=list(verdict.get("quote_warnings") or []),
+        reference_flags=_reference_flags(precheck, verdict, cfg),
     )
 
 # --- Ranking and the cap ----------------------------------------------------

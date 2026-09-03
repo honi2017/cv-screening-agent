@@ -995,3 +995,117 @@ def find_location(markdown: str, profile_data: list[dict[str, Any]]) -> dict[str
         "needs_sponsorship": needs_sponsorship,
         "region_raw": region_raw,
     }
+
+
+# --- Reference flag: offshore/nearshore collaboration claim -----------------
+#
+# This detector feeds a REFERENCE flag only (screen.rank._reference_flags):
+# a chip a human reads and weighs, never a score input. It exists because the
+# hiring manager wants to sanity-check CV claims like "Collaborated with
+# offshore engineering teams in Vietnam to design and deploy integration
+# APIs" against whether the named employer actually has staff in that
+# country -- and that check cannot be automated. LinkedIn's company "People"
+# tab requires an authenticated session; anonymous requests are bot-walled,
+# and scripting a logged-in session breaches LinkedIn's User Agreement. It
+# also wouldn't prove much even if it could be run: "offshore" ordinarily
+# names a *vendor* relationship, so the employer legitimately shows zero
+# staff in that country while the claim is entirely true. So this flag never
+# judges the claim -- it only puts the sentence in front of a human.
+#
+# Two deliberate omissions, both load-bearing:
+#
+# 1. This makes NO attempt to attribute a claim to an employer. The parsed
+#    markdown's employment headings mix title, dates, company, and location
+#    on one messy line with no reliable separator between them, and guessing
+#    wrong -- pinning an offshore claim on the wrong employer -- would be
+#    worse than surfacing the claim with no employer at all. The report
+#    already links the candidate's own resume; a human reads the real
+#    employer straight off it.
+# 2. This never fabricates a verification link (e.g. a canned LinkedIn
+#    search URL). That would imply a check happened when none did. The only
+#    thing surfaced is the claim text itself.
+#
+# Detection is deliberately loose: a keyword/proximity rule with good recall,
+# not a precise one with clever exceptions. That is safe ONLY because this
+# output can never cost a candidate a point or a rank -- a false positive
+# here costs one extra line on a page a human is already reading. Contrast
+# `_PLACEHOLDER_PATTERNS` above, which feeds a hard gate and therefore had to
+# be narrowed until it could not misfire on genuine prose. If anyone ever
+# attaches points (a penalty, a gate) to this flag, they must re-derive the
+# detection from scratch with that bar in mind -- it was never built to
+# carry that weight.
+
+_OFFSHORE_TERM_RE = re.compile(r"\b(?:offshore|offshored|nearshore)\b", re.I)
+
+_COLLAB_WORD_RE = re.compile(
+    r"\bteams?\b|\bengineers?\b|\bdevelopers?\b|\bcollaborat\w*\b|\bpartner\w*\b|\bcoordinat\w*\b",
+    re.I,
+)
+
+# Reuses the country list already assembled for residence detection
+# (`_NON_US_COUNTRIES`, above) rather than keeping a second list in sync with
+# it, plus a handful of region words that list has no reason to carry (it is
+# scoped to "does the value read like a US vs. non-US address", not to broad
+# geography). Order does not matter here: this scans with `\b...\b`
+# word-boundary alternation, not the ordered `endswith` chain that tuple's
+# own comment cares about.
+_OFFSHORE_PLACE_NAMES = _NON_US_COUNTRIES + (
+    "asia", "apac", "emea", "eastern europe", "latin america", "southeast asia",
+)
+_OFFSHORE_PLACE_RE = re.compile(
+    r"\b(?:" + "|".join(re.escape(p) for p in _OFFSHORE_PLACE_NAMES) + r")\b", re.I
+)
+
+_LINE_BULLET_STRIP_RE = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s+")
+_LINE_EMPHASIS_STRIP_RE = re.compile(r"[*_`]{1,3}")
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+
+def _candidate_sentences(markdown: str) -> list[str]:
+    """Crude sentence/bullet units for the offshore-claim scan: one per
+    markdown list item, further split on sentence punctuation for ordinary
+    prose lines that pack more than one clause. Precision doesn't matter
+    here -- see the module comment above for why a loose scan is safe for
+    a reference-only flag.
+    """
+    out: list[str] = []
+    for line in (markdown or "").splitlines():
+        if not line.strip():
+            continue
+        text = _LINE_BULLET_STRIP_RE.sub("", line)
+        text = _LINE_EMPHASIS_STRIP_RE.sub("", text)
+        for clause in _SENTENCE_SPLIT_RE.split(text):
+            clause = clause.strip()
+            if clause:
+                out.append(clause)
+    return out
+
+
+def find_offshore_claims(markdown: str) -> list[dict[str, Any]]:
+    """Sentences/bullets that assert collaboration with a geographically
+    separated team -- see the module comment above for what this is for and
+    why the detection rule is deliberately loose. Fires on a sentence that
+    either names offshore/nearshore/offshored outright, or names a country
+    or region alongside a collaboration word (team, engineer, developer,
+    collaborat*, partner*, coordinat*). The matching sentence is stored
+    verbatim -- exactly as written, not normalized -- because for this flag
+    the sentence IS the evidence.
+    """
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for sentence in _candidate_sentences(markdown):
+        has_offshore_term = bool(_OFFSHORE_TERM_RE.search(sentence))
+        # Lowercased for storage -- these match against the (lowercase)
+        # `_OFFSHORE_PLACE_NAMES` canonical spellings and get deduplicated
+        # across sentences, so "Vietnam" in one bullet and "vietnam" in
+        # another must collapse to one entry, not two.
+        places = sorted({m.group(0).lower() for m in _OFFSHORE_PLACE_RE.finditer(sentence)})
+        has_collab_word = bool(_COLLAB_WORD_RE.search(sentence))
+        if not (has_offshore_term or (places and has_collab_word)):
+            continue
+        key = normalize(sentence)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append({"sentence": sentence, "places": places})
+    return out

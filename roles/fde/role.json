@@ -83,5 +83,9 @@
   "tiebreak_timezones": [
     "ET",
     "CT"
-  ]
+  ],
+  "reference_flags": {
+    "offshore_claim": true,
+    "full_criteria_coverage": true
+  }
 }

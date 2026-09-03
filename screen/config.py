@@ -34,6 +34,16 @@ class RoleConfig:
     penalties: dict[str, int]
     tiebreak_timezones: list[str]
     role_dir: Path = field(default_factory=Path)
+    # Reference flags (see screen.rank._reference_flags) carry no score effect
+    # at all -- compute_penalties never reads this dict, only assess() does,
+    # to decide whether to surface each one in the report. Optional and
+    # missing keys default enabled, so an older/minimal role.json (see
+    # tests/test_config.py's hand-built fixtures) that predates this feature
+    # keeps working with no change.
+    reference_flags: dict[str, bool] = field(default_factory=dict)
+
+    def reference_flag_enabled(self, key: str) -> bool:
+        return bool(self.reference_flags.get(key, True))
 
     def criterion(self, key: str) -> Criterion:
         for c in self.criteria:
@@ -109,4 +119,5 @@ def load_role(role_dir: Path) -> RoleConfig:
         penalties={k: int(v) for k, v in raw["penalties"].items()},
         tiebreak_timezones=list(raw["tiebreak_timezones"]),
         role_dir=role_dir,
+        reference_flags={k: bool(v) for k, v in raw.get("reference_flags", {}).items()},
     )
