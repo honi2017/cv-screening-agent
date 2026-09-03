@@ -503,16 +503,28 @@ def rank_and_cut(
             existing.status = "withdrawn"
             existing.status_changed_run = run_id
 
+    # Every scored list is returned in RANKING order — highest final score
+    # first, using the same key the cut itself applied so the tiebreak agrees.
+    # These previously came back as sorted(...) on the candidate id, which the
+    # report then numbered 1..N: the rank column was ordering by database id and
+    # a reader saw 75 above 85. `needs_review` stays in id order because those
+    # candidates have no verdict and therefore no score to rank by.
+    def by_rank(ids: list[int]) -> list[int]:
+        scored = [cid for cid in ids if cid in assessments]
+        unscored = [cid for cid in ids if cid not in assessments]
+        scored.sort(key=lambda cid: _sort_key(assessments[cid], cfg))
+        return scored + sorted(unscored)
+
     return CutResult(
         cap=cap,
         pool_size=pool_size,
-        accepted=sorted(accepted),
+        accepted=by_rank(accepted),
         waitlist=waitlist,
-        gated=sorted(gated),
+        gated=by_rank(gated),
         needs_review=sorted(needs_review),
-        newly_accepted=sorted(newly_accepted),
-        newly_gated=sorted(newly_gated),
-        no_slot=sorted(no_slot),
+        newly_accepted=by_rank(newly_accepted),
+        newly_gated=by_rank(newly_gated),
+        no_slot=by_rank(no_slot),
         calibration_window=window,
         quality_floor=floor,
     )

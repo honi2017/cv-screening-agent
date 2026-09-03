@@ -220,6 +220,18 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
 
     head = "<tr>" + "".join(f"<th>{col}</th>" for col in _TABLE_COLUMNS) + "</tr>"
     body = []
+    # This table numbers its rows, so the numbers are a rank claim and must
+    # agree with the Score column. Sort here rather than trusting the caller:
+    # the lists once arrived ordered by candidate id and the page rendered rank
+    # 1 at 75 points above rank 2 at 85 — a silent lie no test caught, only a
+    # reader did. Candidates with no assessment sort last; they are skipped below.
+    ids = sorted(
+        ids,
+        key=lambda cid: (
+            -data.assessments[cid].final if cid in data.assessments else 1,
+            cid,
+        ),
+    )
     for rank, cid in enumerate(ids, start=1):
         assessment = data.assessments.get(cid)
         if assessment is None:

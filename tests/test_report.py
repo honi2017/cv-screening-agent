@@ -155,6 +155,27 @@ def test_html_shows_cap_arithmetic():
     assert "of 6" in html
 
 
+def test_shortlist_rank_numbers_ascend_as_scores_descend():
+    """The rank column must agree with the score column.
+
+    The report numbers rows in the order CutResult hands them over, so if that
+    order is not by score the rank column silently lies -- which is exactly what
+    shipped, showing rank 1 at 75 points above rank 2 at 85.
+    """
+    data = _data()
+    # three accepted candidates whose id order disagrees with their score order
+    data.cut.accepted[:] = [2, 1, 3]
+    html = render_html(data, CFG)
+    shortlist = html.split(">Shortlist<", 1)[1].split("<h2", 1)[0]
+    seen = re.findall(r"<td>(\d+)</td><td>[^<]*Cand(\d+) Test", shortlist)
+    ranks = [int(r) for r, _ in seen]
+    scores = [data.assessments[int(c)].final for _, c in seen]
+    assert ranks == sorted(ranks), f"rank column not ascending: {ranks}"
+    assert scores == sorted(scores, reverse=True), (
+        f"ranks {ranks} do not follow descending scores {scores}"
+    )
+
+
 def test_html_lists_shortlist_names_and_scores():
     html = render_html(_data(), CFG)
     assert "Cand1 Test" in html

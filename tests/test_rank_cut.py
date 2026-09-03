@@ -36,6 +36,43 @@ def entry(cid, status, final=0.0, run="run-0"):
     )
 
 
+def test_scored_lists_come_back_in_ranking_order_not_id_order():
+    """Accepted/gated/delta lists must be ordered by score, never by candidate id.
+
+    This shipped broken: the lists were returned as sorted(...) on the integer
+    candidate id, and the report numbers rows 1..N in the order it receives
+    them, so a reader saw rank 1 scoring 75 above rank 2 scoring 85. Nothing
+    caught it because no test asserted the ordering -- only a human reading the
+    rendered page did.
+
+    Ids here are deliberately chosen so id order and score order disagree.
+    """
+    assessments = {
+        100: a(100, 60.0),   # lowest id, lowest score
+        300: a(300, 90.0),   # highest id, highest score
+        200: a(200, 75.0),
+        400: a(400, 50.0, gate="G1"),
+        500: a(500, 70.0, gate="G2"),
+    }
+    result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
+    accepted_scores = [assessments[c].final for c in result.accepted]
+    assert accepted_scores == sorted(accepted_scores, reverse=True), result.accepted
+    gated_scores = [assessments[c].final for c in result.gated]
+    assert gated_scores == sorted(gated_scores, reverse=True), result.gated
+    # and the top-scoring candidate must be first, not the lowest id
+    assert result.accepted[0] == 300
+
+
+def test_needs_review_stays_in_id_order_having_no_score():
+    """needs_review candidates have no verdict, so there is no score to rank by."""
+    assessments = {300: a(300, 90.0), 100: a(100, 60.0)}
+    result = rank_and_cut(
+        assessments, {}, CFG, "run-1", needs_review={900: "unparseable", 800: "missing_resume"},
+        withdrawn=set(),
+    )
+    assert result.needs_review == [800, 900]
+
+
 def test_cap_is_twenty_percent_floored():
     assessments = {i: a(i, 100 - i) for i in range(1, 11)}
     result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
