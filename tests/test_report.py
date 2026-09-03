@@ -212,6 +212,23 @@ def test_html_links_to_trakstar():
     assert "anduin.hire.trakstar.com" in html
 
 
+def test_trakstar_url_matches_the_confirmed_live_route_exactly():
+    """Pin the deep-link route against a URL read off the live Trakstar UI.
+
+    An earlier guessed route (`#candidates/{id}?opening={id}`) silently resolved
+    to the opening's candidate list instead of the individual record, so the
+    report shipped 70 links that all went to the wrong page. The candidate is a
+    `view:<id>` segment appended to the opening's LIST route -- not a route of
+    its own -- and the trailing slash is part of it. This asserts the whole
+    string so any drift fails loudly rather than degrading to a list view.
+    """
+    assert trakstar_url("704353", 71588398) == (
+        "https://anduin.hire.trakstar.com/app/#candidates/list"
+        "/selected_openings=704353&orderBy=date_created&order=desc"
+        "/view:71588398/"
+    )
+
+
 def test_trakstar_url_contains_candidate_and_opening_id():
     url = trakstar_url("704353", 42)
     assert "42" in url
@@ -248,10 +265,17 @@ def test_candidate_without_resume_renders_only_trakstar_link():
 
 
 def test_footer_mentions_link_behaviour():
+    """The footer must explain what each link opens, and warn about the CV link.
+
+    The resume URL is a tokenised link that serves the file without any
+    authentication, so anyone holding it can read the CV. A reader who forwards
+    this report needs to know that from the page itself.
+    """
     html = render_html(_data(), CFG)
     footer = html.split("<footer>", 1)[1]
-    assert "candidate list" in footer
+    assert "candidate's own record" in footer
     assert "Resume" in footer
+    assert "without signing in" in footer
 
 
 def _rows(html_fragment):

@@ -19,17 +19,28 @@ from screen.ledger import LedgerEntry
 from screen.paths import Paths
 from screen.rank import Assessment, CutResult
 
-# NOTE: this per-candidate route is UNVERIFIED. As written it resolves to the
-# opening's general candidate list, not the individual candidate's record --
-# the Trakstar web app is a single-page app with a hash-based client-side
-# router, and the API exposes no permalink field on the candidate object (no
-# `url`, no `link`) from which the real per-candidate route could be derived.
-# The one URL known to work is the list view for an opening, e.g.:
-#   https://anduin.hire.trakstar.com/app/#candidates/list/selected_openings=704353&orderBy=date_created&order=desc/p:1/
-# When the correct per-candidate route is confirmed, fix it by editing this
-# template only -- nothing else in this module encodes the route.
+# Per-candidate deep link, CONFIRMED against the live Trakstar UI.
+#
+# The Trakstar web app is a hash-routed single-page app and the API exposes no
+# permalink on the candidate object (no `url`, no `link`), so this route cannot
+# be derived from the API — it was read off the address bar. An earlier guessed
+# form (`#candidates/{id}?opening={id}`) silently fell back to the opening's
+# candidate list, which is why the shape here matters:
+#
+# the candidate is a `view:<id>` segment appended to the opening's LIST route,
+# not a route of its own. The `orderBy`/`order` parameters are part of that list
+# route; they only set the underlying list's sort and do not affect which
+# candidate opens.
+#
+# Known-good example:
+#   .../app/#candidates/list/selected_openings=704353&orderBy=date_created&order=desc/view:71588398/
+#
+# Keep the trailing slash. This template is the only place the route is
+# encoded — correcting it later means editing this string alone.
 TRAKSTAR_URL_TEMPLATE = (
-    "https://anduin.hire.trakstar.com/app/#candidates/{candidate_id}?opening={opening_id}"
+    "https://anduin.hire.trakstar.com/app/#candidates/list"
+    "/selected_openings={opening_id}&orderBy=date_created&order=desc"
+    "/view:{candidate_id}/"
 )
 
 
@@ -354,8 +365,9 @@ not displaced by later applicants.</p>
 school names — those are redacted before evaluation and re-attached only in this
 report. Every score and every elimination quotes the CV text it rests on; a
 score whose quote could not be found in the CV is zeroed and marked.</p>
-<p>The Trakstar link currently opens the opening's general candidate list rather
-than the individual candidate's record; the Resume link opens the CV file directly.</p>
+<p>The Trakstar link opens the candidate's own record in the applicant tracking
+system; the Resume link opens their CV file directly. Treat the Resume link as
+sensitive — it grants access to the file without signing in.</p>
 <p><strong>Calibration:</strong> {_e(data.calibration_note) or 'not run'}</p>
 <table><tr><th>Criterion</th><th>Max</th></tr>{criteria_rows}</table>
 <table><tr><th>Gate rule</th><th>Value</th></tr>{gate_rows}</table>
