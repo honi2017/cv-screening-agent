@@ -242,7 +242,7 @@ def cmd_rank(args: argparse.Namespace) -> int:
         run_id = args.run_id or run_id_now(datetime.now())
         dry = rank_and_cut(
             assessments, dict(ledger), cfg, run_id, needs_review, withdrawn,
-            known_ids=known_ids,
+            known_ids=known_ids, rebaseline=args.rebaseline,
         )
         window = []
         for cid in dry.calibration_window:
@@ -290,7 +290,7 @@ def cmd_rank(args: argparse.Namespace) -> int:
     previous_status = {cid: entry.status for cid, entry in ledger.items()}
     cut = rank_and_cut(
         assessments, ledger, cfg, run_id, needs_review, withdrawn, calibration_order,
-        known_ids=known_ids,
+        known_ids=known_ids, rebaseline=args.rebaseline,
     )
     save_ledger(ledger, paths.ledger_json)
 
@@ -316,6 +316,14 @@ def cmd_rank(args: argparse.Namespace) -> int:
             "no_slot": cut.no_slot,
             "calibration_window": cut.calibration_window,
             "quality_floor": cut.quality_floor,
+            # Audit trail for the opt-in re-baseline escape hatch (see
+            # screen.rank.rank_and_cut's `rebaseline` docstring): `rebaseline`
+            # records whether stickiness was switched off for THIS run, and
+            # `unseated` names exactly who lost an accepted slot as a
+            # consequence, so a future reader never has to guess why a
+            # status changed.
+            "rebaseline": cut.rebaseline,
+            "unseated": cut.unseated,
         },
         "needs_review_reasons": needs_review,
     }
@@ -421,6 +429,16 @@ def build_parser() -> argparse.ArgumentParser:
     p_rank.add_argument("--finalize", action="store_true")
     p_rank.add_argument("--calibration", help="JSON file with {order: [...], note: str}")
     p_rank.add_argument("--run-id", dest="run_id")
+    # Opt-in only, never the default and never inferred from anything else
+    # (a rubric change, a config edit) -- see screen.rank.rank_and_cut's
+    # `rebaseline` docstring. A human passes this explicitly, on the one run
+    # where they want the cut decided purely by current scores.
+    p_rank.add_argument(
+        "--rebaseline",
+        action="store_true",
+        help="ignore ledger stickiness for this run and re-decide the cut purely by "
+        "current scores (opt-in; must be requested explicitly)",
+    )
     p_rank.set_defaults(func=cmd_rank)
 
     p_report = sub.add_parser("report", parents=[out_parent], help="render HTML, Markdown, CSV")
@@ -447,6 +465,7 @@ def main(argv: list[str] | None = None) -> int:
     for name, default in (
         ("today", None), ("force", False), ("full", False), ("run_id", None),
         ("calibration", None), ("prepare", False), ("finalize", False),
+        ("rebaseline", False),
         ("source", "trakstar"), ("path", None), ("csv", None), ("out", None),
     ):
         if not hasattr(args, name):

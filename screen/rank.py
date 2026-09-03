@@ -472,6 +472,11 @@ class CutResult:
     no_slot: list[int]
     calibration_window: list[int]
     quality_floor: float | None
+    # Both default so every existing caller (and every `.cut.json` written
+    # before this change existed) keeps working unchanged -- see the
+    # `rebaseline` parameter on `rank_and_cut` below for what these mean.
+    rebaseline: bool = False
+    unseated: list[int] = field(default_factory=list)
 
 
 def _sort_key(assessment: Assessment, cfg: RoleConfig) -> tuple:
@@ -489,6 +494,7 @@ def rank_and_cut(
     withdrawn: set[int],
     calibration_order: list[int] | None = None,
     known_ids: set[int] | None = None,
+    rebaseline: bool = False,
 ) -> CutResult:
     """Rank, apply the cap, and update the ledger in place.
 
@@ -504,18 +510,40 @@ def rank_and_cut(
     `None`, meaning "derive everything from the arguments as before and
     mark nothing absent" -- kept for backward compatibility with callers
     that don't have the full id set handy.
+
+    `rebaseline` is the opt-in, explicit escape hatch from stickiness: when
+    True, the cut is decided purely by current scores -- no candidate is
+    exempt from re-ranking merely because a past run accepted them. It must
+    never be inferred (from a rubric bump, a config change, anything) --
+    only ever set because a human asked for it on this specific run. See the
+    `already_accepted` seeding and the ledger-update loop below for the two
+    places that check it, and `CutResult.unseated` for the audit trail it
+    produces.
     """
     pool_ids = (set(assessments) | set(needs_review)) - withdrawn
     pool_size = len(pool_ids)
     cap = math.floor(cfg.cap_fraction * pool_size)
+
+    # Snapshot of who the ledger says is accepted *before* anything below
+    # mutates it -- used only to build `unseated` (see the ledger-update
+    # loop). Cheap to compute unconditionally; only consulted when
+    # `rebaseline` is set.
+    previously_accepted_in_ledger = {
+        cid for cid, entry in ledger.items() if entry.status == "accepted"
+    }
 
     gated: list[int] = []
     rankable: list[Assessment] = []
     for cid, assessment in assessments.items():
         if cid in withdrawn or cid in needs_review:
             continue
+        # Under `rebaseline`, the ledger's "accepted" status is being
+        # deliberately ignored, so it must not exempt anyone from a gate
+        # either -- otherwise "the cut is decided purely by current scores"
+        # would be a lie for exactly the candidates this flag exists to
+        # re-examine. Gates still apply; only stickiness is switched off.
         previously_accepted = (
-            cid in ledger and ledger[cid].status == "accepted"
+            not rebaseline and cid in ledger and ledger[cid].status == "accepted"
         )
         if assessment.gate and not previously_accepted:
             gated.append(cid)
@@ -539,9 +567,18 @@ def rank_and_cut(
         remainder = [cid for cid in window if cid not in proposed]
         order = order[:lo] + proposed + remainder + order[hi:]
 
-    already_accepted = [
+    # `rebaseline` seeds this empty: the whole point is to decide the cut
+    # purely by current scores, with no run-order advantage for anyone.
+    already_accepted = [] if rebaseline else [
         cid for cid in order if cid in ledger and ledger[cid].status == "accepted"
     ]
+    # Consequence, documented deliberately (not an accident): an empty
+    # `already_accepted` makes `floor` None below, so the quality floor is
+    # OFF for a rebaseline run -- every candidate clears it. The floor
+    # normally guards against a slot opened purely by pool growth being
+    # filled by a weak brand-new arrival; that scenario doesn't exist when
+    # the whole cut is being recomputed from scratch, so suppressing the
+    # floor here is correct, not a gap.
     floor: float | None = None
     if already_accepted:
         floor = round(
@@ -573,6 +610,17 @@ def rank_and_cut(
 
     accepted_set = set(accepted)
     waitlist = [cid for cid in order if cid not in accepted_set]
+
+    # Candidates who lost an accepted slot specifically because of this
+    # rebaseline run -- the audit trail the run record needs so a future
+    # reader sees *why* a status changed. Deliberately empty whenever
+    # `rebaseline` is False: stickiness guarantees nobody is ever displaced
+    # by the algorithm on an ordinary run, so this list would be a
+    # meaningless restatement of unrelated ledger churn (e.g. a candidate
+    # withdrawing in the ATS) rather than a rebaseline consequence.
+    unseated: list[int] = []
+    if rebaseline:
+        unseated = sorted(previously_accepted_in_ledger - accepted_set)
 
     # --- Ledger update ------------------------------------------------------
     newly_gated: list[int] = []
@@ -612,10 +660,15 @@ def rank_and_cut(
         # as a flag, and a human decides whether to override.
         if assessment is not None:
             existing.gate = assessment.gate
-            if existing.status != "accepted":
+            if rebaseline or existing.status != "accepted":
                 existing.final = assessment.final
 
-        if existing.status == "accepted":
+        # Sticky-accept is exactly what `rebaseline` opts out of for this
+        # run: with it set, a demoted candidate must get a normal status
+        # transition below (and an updated `status_changed_run`), not this
+        # early exit that would otherwise silently keep them "accepted"
+        # forever with no record that anything changed.
+        if not rebaseline and existing.status == "accepted":
             continue  # sticky
 
         if existing.status != new_status:
@@ -676,4 +729,6 @@ def rank_and_cut(
         no_slot=by_rank(no_slot),
         calibration_window=window,
         quality_floor=floor,
+        rebaseline=rebaseline,
+        unseated=unseated,
     )

@@ -209,6 +209,39 @@ def test_rubric_change_requires_full_flag(project):
     assert main([*args, "pending", "--full", "--out", str(out_file)]) == 0
 
 
+def test_rank_finalize_rebaseline_flag_and_unseated_reach_the_run_record(project):
+    """Plumbing test: `rank --finalize --rebaseline` must record `rebaseline:
+    true` and an `unseated` list in the `.cut.json` run record, and a plain
+    `rank --finalize` (the default) must record `rebaseline: false` with an
+    empty `unseated` -- the audit trail for whichever mode actually ran.
+    """
+    root, src = project
+    main(_args(root, "fetch", "--source", "folder", "--path", str(src)))
+    main(_args(root, "parse"))
+    main(_args(root, "precheck", "--today", "2026-08"))
+    out_file = root / "pending.json"
+    main(_args(root, "pending", "--out", str(out_file)))
+    _write_fake_verdicts(root, json.loads(out_file.read_text())["pending"])
+
+    prep = root / "prepare.json"
+    main(_args(root, "rank", "--prepare", "--out", str(prep)))
+    run_id = json.loads(prep.read_text())["run_id"]
+
+    default_out = root / "default.json"
+    assert main(_args(root, "rank", "--finalize", "--run-id", run_id, "--out", str(default_out))) == 0
+    default_state = json.loads(default_out.read_text())
+    assert default_state["cut"]["rebaseline"] is False
+    assert default_state["cut"]["unseated"] == []
+
+    rebaseline_out = root / "rebaseline.json"
+    assert main(
+        _args(root, "rank", "--finalize", "--rebaseline", "--run-id", run_id + "b", "--out", str(rebaseline_out))
+    ) == 0
+    rebaseline_state = json.loads(rebaseline_out.read_text())
+    assert rebaseline_state["cut"]["rebaseline"] is True
+    assert isinstance(rebaseline_state["cut"]["unseated"], list)
+
+
 def test_bad_source_is_usage_error(project):
     root, src = project
     assert main(_args(root, "fetch", "--source", "folder")) == 2

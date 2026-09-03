@@ -119,6 +119,7 @@ details { margin:4px 0; } summary { cursor:pointer; color:var(--accent); font-si
 blockquote { margin:2px 0 6px; padding:4px 10px; border-left:3px solid var(--line);
              color:#374151; font-style:italic; }
 .gate { color:var(--bad); font-weight:600; }
+.inversion-note { color:var(--warn); font-weight:600; margin:8px 0; }
 footer { margin-top:36px; color:var(--muted); font-size:12px; }
 footer table { max-width:760px; }
 .empty-note { color:var(--muted); font-style:italic; }
@@ -368,6 +369,56 @@ def _delta_html(data: ReportInput) -> str:
     return "".join(blocks)
 
 
+def _inversion_count(data: ReportInput) -> int:
+    """How many waitlisted candidates score strictly above the lowest-scoring
+    accepted candidate.
+
+    This is the permanent guard for the inversion the hiring manager once
+    found invisible: a waitlisted candidate scoring 74 sitting above accepted
+    candidates at 70, 65, 63, and 62 with nothing on the page explaining it.
+    An earlier "would have qualified, no slot" section explained this and was
+    removed at the hiring manager's request (see `_delta_html`'s comment on
+    `no_slot`); removing it is exactly what made the inversion invisible, so
+    this exists specifically so removing that section can never do that
+    again.
+
+    Ties, the calibration window (the main agent may reorder within it, see
+    `rank_and_cut`), and the `cid in ledger` quality-floor exemption for an
+    existing waitlisted candidate can all legitimately produce a small,
+    explainable inversion even outside a re-baseline run. A nonzero count
+    here is not asserting a bug -- it is making an ordinary, sometimes
+    legitimate consequence of the cap visible instead of silent.
+    """
+    accepted_scores = [
+        data.assessments[cid].final for cid in data.cut.accepted if cid in data.assessments
+    ]
+    if not accepted_scores:
+        return 0
+    floor = min(accepted_scores)
+    return sum(
+        1
+        for cid in data.cut.waitlist
+        if cid in data.assessments and data.assessments[cid].final > floor
+    )
+
+
+def _inversion_html(data: ReportInput) -> str:
+    """Render nothing at all when there is no inversion -- see
+    `_inversion_count`. Right after a re-baseline this is always empty by
+    construction (the cut was just recomputed purely by score); the line
+    earns its place again once stickiness re-freezes the cut on later runs.
+    """
+    count = _inversion_count(data)
+    if not count:
+        return ""
+    noun = "candidate" if count == 1 else "candidates"
+    verb = "scores" if count == 1 else "score"
+    return (
+        f'<p class="inversion-note">{count} waitlisted {noun} {verb} above the '
+        "lowest-scoring accepted candidate — held out by the cap, not by score.</p>"
+    )
+
+
 def render_html(data: ReportInput, cfg: RoleConfig) -> str:
     cut = data.cut
     pct = round(cfg.cap_fraction * 100)
@@ -434,6 +485,7 @@ rubric v{cfg.rubric_version}</p>
 {_delta_html(data)}
 
 <h2>Shortlist</h2>
+{_inversion_html(data)}
 {_candidate_table(data, cut.accepted, cfg)}
 
 <h2>Waitlist</h2>
@@ -627,6 +679,13 @@ def write_all(data: ReportInput, cfg: RoleConfig, paths: Paths) -> dict[str, Pat
                 "quality_floor": data.cut.quality_floor,
                 "calibration_window": data.cut.calibration_window,
                 "calibration_note": data.calibration_note,
+                # See screen.rank.rank_and_cut's `rebaseline` docstring: the
+                # opt-in escape hatch from ledger stickiness. Recorded here
+                # too (not just in the rank-stage `.cut.json`) so the
+                # human-facing audit artifact answers "why did this status
+                # change" on its own.
+                "rebaseline": data.cut.rebaseline,
+                "unseated": data.cut.unseated,
             },
             indent=2,
         )

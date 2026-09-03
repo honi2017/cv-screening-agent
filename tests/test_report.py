@@ -504,6 +504,38 @@ def test_waitlist_detail_rows_are_grey():
         assert re.match(r'<tr class="[^"]*\bgrey\b[^"]*"', row)
 
 
+# --- Change 2: the permanent inversion guard --------------------------------
+#
+# `_data()`'s default fixture has one accepted candidate (id 1, score 82) and
+# a waitlist topping out at 71 (id 2) -- no inversion. These tests bump a
+# waitlisted candidate's score above the lone accepted one to create one.
+
+def test_inversion_line_absent_when_no_inversion():
+    html = render_html(_data(), CFG)
+    assert "held out by the cap" not in html
+    assert 'class="inversion-note"' not in html
+
+
+def test_inversion_line_renders_with_the_correct_count_when_an_inversion_exists():
+    data = _data()
+    # Candidate 2 (waitlisted) now outscores candidate 1 (the lone accepted
+    # candidate, 82) -- exactly one inversion.
+    data.assessments[2] = _assessment(2, 90.0, flags=["no LinkedIn"])
+    html = render_html(data, CFG)
+    assert 'class="inversion-note"' in html
+    assert "1 waitlisted candidate scores above" in html
+    assert "held out by the cap, not by score" in html
+
+
+def test_inversion_line_counts_every_waitlisted_candidate_above_the_floor():
+    data = _data()
+    # Both waitlisted candidates (2 at 71, 3 at 55) now outscore the lone
+    # accepted candidate (82) once it's dropped to 50.
+    data.assessments[1] = _assessment(1, 50.0)
+    html = render_html(data, CFG)
+    assert "2 waitlisted candidates score above" in html
+
+
 # --- Markdown ---------------------------------------------------------------
 
 def test_markdown_is_short_and_has_the_numbers():

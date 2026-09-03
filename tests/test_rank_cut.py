@@ -339,3 +339,74 @@ def test_entries_still_present_in_assessments_are_untouched_by_known_ids():
         assessments, ledger, CFG, "run-2", {}, set(), known_ids={1, 2, 3, 4, 5}
     )
     assert ledger[1].status != "withdrawn"
+
+
+# --- Change 1: `--rebaseline` -----------------------------------------------
+#
+# `rank_and_cut`'s default behaviour is sticky: `already_accepted` is seeded
+# from the ledger before any score is consulted, so a previously-accepted
+# candidate can never be displaced by a newer, higher-scoring arrival. That
+# is deliberate and normally correct. `rebaseline=True` is the opt-in,
+# explicit escape hatch: it seeds `already_accepted` empty so the cut is
+# decided purely by current scores. These tests assert both directions in
+# one pair, since the contrast between them *is* the feature -- see the pair
+# below.
+
+
+def test_rebaseline_lets_a_higher_scoring_candidate_displace_a_lower_scoring_accepted_one():
+    # Pool of 5, cap floor(0.2*5) = 1. Candidate 1 was accepted long ago at a
+    # low score; candidate 2 now outscores them but is normally locked out by
+    # stickiness.
+    ledger = {1: entry(1, "accepted", 40.0, run="run-0")}
+    assessments = {1: a(1, 40), 2: a(2, 90), 3: a(3, 10), 4: a(4, 5), 5: a(5, 1)}
+    result = rank_and_cut(assessments, ledger, CFG, "run-2", {}, set(), rebaseline=True)
+
+    assert result.rebaseline is True
+    assert result.accepted == [2]
+    assert 1 not in result.accepted
+    # Ledger honesty: candidate 1 gets a normal status transition, not a
+    # silent rewrite of history -- their ledger entry must show they were
+    # once accepted and are no longer, with the run that changed it recorded.
+    assert ledger[1].status == "waitlist"
+    assert ledger[1].status_changed_run == "run-2"
+    # The audit trail: candidate 1 is named as having lost their slot.
+    assert result.unseated == [1]
+
+
+def test_without_rebaseline_the_previously_accepted_candidate_keeps_the_slot():
+    # Same pool, same scores, no flag: this is the safety property the
+    # ledger exists to protect, and it must be exactly what happens today.
+    ledger = {1: entry(1, "accepted", 40.0, run="run-0")}
+    assessments = {1: a(1, 40), 2: a(2, 90), 3: a(3, 10), 4: a(4, 5), 5: a(5, 1)}
+    result = rank_and_cut(assessments, ledger, CFG, "run-2", {}, set())
+
+    assert result.rebaseline is False
+    assert result.accepted == [1]
+    assert 2 not in result.accepted
+    assert ledger[1].status == "accepted"
+    assert ledger[1].status_changed_run == "run-0"
+    assert result.unseated == []
+
+
+def test_rebaseline_still_gates_a_previously_accepted_candidate_who_now_trips_a_gate():
+    # A gated candidate must not be accepted merely because the ledger was
+    # ignored -- gates still apply under --rebaseline.
+    ledger = {1: entry(1, "accepted", 90.0, run="run-0")}
+    assessments = {1: a(1, 90, gate="G1"), 2: a(2, 50), 3: a(3, 40), 4: a(4, 30), 5: a(5, 20)}
+    result = rank_and_cut(assessments, ledger, CFG, "run-2", {}, set(), rebaseline=True)
+
+    assert 1 not in result.accepted
+    assert 1 in result.gated
+    assert result.accepted == [2]
+    assert ledger[1].status == "gated"
+    assert ledger[1].status_changed_run == "run-2"
+    assert 1 in result.unseated
+
+
+def test_rebaseline_off_by_default_and_unseated_empty_when_no_ledger():
+    # No ledger at all: rebaseline has nothing to do, and both new fields
+    # must still be present and inert.
+    assessments = {i: a(i, 100 - i) for i in range(1, 11)}
+    result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
+    assert result.rebaseline is False
+    assert result.unseated == []
