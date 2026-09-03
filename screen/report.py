@@ -82,13 +82,38 @@ def _e(value: Any) -> str:
 
 
 _CSS = """
-:root { --bg:#fff; --fg:#16181d; --muted:#6b7280; --line:#e5e7eb; --accent:#1f6feb;
-        --ok:#0f7b3f; --warn:#9a6700; --bad:#b42318; --chip:#f3f4f6; }
+:root {
+  --bg:#fff; --fg:#16181d; --muted:#6b7280; --line:#e5e7eb; --accent:#1f6feb;
+  --ok:#0f7b3f; --ok-bg:#eaf6ef;
+  --warn:#9a6700; --warn-bg:#fbf0da;
+  --bad:#b42318; --bad-bg:#fbeae8;
+  --ref-fg:#3f4b5e; --ref-bg:#f1f4f8; --ref-line:#a9b6c6;
+  --chip:#f3f4f6;
+}
 * { box-sizing: border-box; }
 body { margin:0; padding:24px; background:var(--bg); color:var(--fg);
-       font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; }
-h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:17px; margin:32px 0 8px;
-     padding-bottom:4px; border-bottom:1px solid var(--line); }
+       font:14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+       /* This report gets printed; ask the browser to keep chip/section fills
+          in a printed copy rather than dropping them to plain text by
+          default. The non-colour cues (border style, shape, icon) below are
+          still what carry the reference/penalty distinction if a given
+          printer or print dialog ignores this anyway. */
+       -webkit-print-color-adjust:exact; print-color-adjust:exact; }
+h1 { font-size:22px; margin:0 0 4px; }
+/* Section headers: a solid background band + left accent bar so it is
+   unmistakable on a quick scroll where one section ends and the next
+   begins -- applies uniformly to every section (Run/Delta/Shortlist/
+   Waitlist/Gated/Needs review/Methodology) rather than singling any one
+   out for colour, which keeps this a spacing/weight change, not a redesign. */
+h2 { font-size:14px; margin:34px 0 10px; padding:9px 12px;
+     background:var(--chip); border-left:4px solid var(--accent); border-radius:0 6px 6px 0;
+     text-transform:uppercase; letter-spacing:.04em; font-weight:700; color:var(--fg); }
+/* Per-gate sub-headings inside "Gated" only (see `_TABLE_COLUMNS` usage below) --
+   reuses the same maroon as the elimination marker so a gate group reads as
+   the same severity class as the inline "flagged ... after acceptance" note. */
+h3 { font-size:12px; margin:18px 0 6px; padding:4px 10px; display:inline-block;
+     background:var(--bad-bg); color:var(--bad); border-left:3px solid var(--bad);
+     border-radius:0 4px 4px 0; font-weight:700; }
 .sub { color:var(--muted); margin:0 0 20px; }
 .stats { display:flex; flex-wrap:wrap; gap:16px; margin:16px 0 8px; }
 .stat { background:var(--chip); border-radius:8px; padding:10px 14px; min-width:110px; }
@@ -98,33 +123,80 @@ th, td { text-align:left; padding:7px 8px; border-bottom:1px solid var(--line);
          vertical-align:top; font-size:13px; }
 th { color:var(--muted); font-weight:600; font-size:12px; text-transform:uppercase; letter-spacing:.03em; }
 tr.grey td { color:var(--muted); }
-.score { font-weight:700; font-variant-numeric:tabular-nums; }
+/* The score is the number a reader's eye should land on first in every row --
+   sized and weighted well above the rest of the row's 13px text. */
+.score { font-size:19px; font-weight:800; font-variant-numeric:tabular-nums;
+         letter-spacing:-.01em; color:var(--fg); }
 .bars { display:flex; gap:2px; align-items:flex-end; height:22px; }
 .bar { width:9px; background:var(--accent); opacity:.85; border-radius:1px 1px 0 0; }
 .bar.empty { background:var(--line); }
-.chip { display:inline-block; background:var(--chip); border-radius:10px; padding:1px 7px;
-        margin:0 3px 3px 0; font-size:11px; color:var(--warn); white-space:nowrap; }
-.chip.bad { color:var(--bad); }
-/* Reference flags: neutral, not warning-colored -- these never cost a point
-   and must never read as a demerit next to the chips above. */
+
+/* Three severity classes, restyled to read apart at a glance without
+   leaning on colour alone (see the `.chip.ref` comment below for why that
+   matters most there):
+     .chip      -- a penalty-derived flag: amber pill, filled.
+     .gate      -- a gate/elimination marker: maroon badge, filled.
+     .chip.ref  -- a reference-only flag: slate tag, dashed border, squared
+                   corners, its own icon glyph. Never a demerit -- see the
+                   `reference_flags` field comment on `screen.rank.Assessment`. */
+.chip { display:inline-block; background:var(--warn-bg); color:var(--warn);
+        border:1px solid transparent; border-radius:999px; padding:1px 8px;
+        margin:0 4px 4px 0; font-size:11px; font-weight:600; white-space:nowrap; }
+.chip.bad { background:var(--bad-bg); color:var(--bad); }
+
+/* Low-key metadata ("since <run-id>") -- deliberately NOT chip-styled, so it
+   never competes with (or gets mistaken for) the severity classes above. */
+.meta-tag { display:inline-block; color:var(--muted); font-size:11px; font-style:italic; }
+
+.gate { display:inline-block; background:var(--bad-bg); color:var(--bad);
+        font-weight:700; font-size:11px; padding:1px 8px; border-radius:3px; }
+
+/* Reference flags used to carry a text label prefixing the whole group,
+   since removed at the hiring manager's request (see `_reference_html`'s
+   docstring) -- the distinction from penalty chips now has to survive on
+   styling alone, including for a colour-blind reader and a printed,
+   greyscale copy. So it is carried by THREE things at once, not just
+   colour: a dashed border (penalty/gate chips have none), squared corners
+   (they are full pills), and a leading icon glyph (`.ref-icon`) that has no
+   equivalent on any other chip. Restyle this rule if the distinction ever
+   needs to be stronger -- do not reach for a text label again. */
 .ref-group { margin-top:4px; }
-.ref-tag { color:var(--muted); font-size:11px; margin-right:5px; }
-.chip.ref { color:var(--muted); border:1px solid var(--line); background:transparent; }
-details { margin:4px 0; } summary { cursor:pointer; color:var(--accent); font-size:12px; }
+.chip.ref { background:var(--ref-bg); color:var(--ref-fg); border:1px dashed var(--ref-line);
+            border-radius:4px; font-weight:500; }
+.ref-icon { margin-right:4px; opacity:.75; }
+
+details { margin:2px 0 0; }
+/* The evidence toggle reads as a clickable control (bordered pill + a
+   direction-indicating glyph that flips on open), not as a stray link. */
+summary { cursor:pointer; display:inline-flex; align-items:center; gap:5px;
+          color:var(--accent); font-size:11px; font-weight:600; padding:3px 10px;
+          border:1px solid var(--accent); border-radius:999px;
+          background:rgba(31,111,235,.06); list-style:none; }
+summary::-webkit-details-marker { display:none; }
+summary::before { content:"\\25b8"; font-size:9px; }
+details[open] summary { background:rgba(31,111,235,.14); }
+details[open] summary::before { content:"\\25be"; }
 .detail-row td { padding-top:0; padding-bottom:0; border-bottom:none; }
-.detail { background:#fafafa; border:1px solid var(--line); border-radius:6px;
-          padding:10px 12px; margin:6px 0 10px; width:100%; }
+/* A coloured top edge (echoing the toggle above it) plus squared top-left
+   corner reads as "this panel hangs off the row above it", not a separate
+   block that happens to sit underneath. */
+.detail { background:#fafafa; border:1px solid var(--line); border-top:2px solid var(--accent);
+          border-radius:0 6px 6px 6px; padding:10px 12px; margin:2px 0 10px; width:100%; }
 .detail dl { display:grid; grid-template-columns:190px 1fr; gap:4px 12px; margin:0; }
 .detail dt { color:var(--muted); } .detail dd { margin:0; }
 blockquote { margin:2px 0 6px; padding:4px 10px; border-left:3px solid var(--line);
              color:#374151; font-style:italic; }
-.gate { color:var(--bad); font-weight:600; }
 .inversion-note { color:var(--warn); font-weight:600; margin:8px 0; }
 footer { margin-top:36px; color:var(--muted); font-size:12px; }
 footer table { max-width:760px; }
 .empty-note { color:var(--muted); font-style:italic; }
-.links a { margin-right:10px; white-space:nowrap; }
-.links a:last-child { margin-right:0; }
+/* Per-row link cluster: quieted to muted, divider-separated text so it reads
+   as reference furniture rather than competing with the score/flags. */
+.links { font-size:11px; }
+.links a { color:var(--muted); text-decoration:none; white-space:nowrap;
+           padding-right:8px; margin-right:8px; border-right:1px solid var(--line); }
+.links a:last-child { border-right:none; margin-right:0; padding-right:0; }
+.links a:hover { color:var(--accent); text-decoration:underline; }
 """
 
 
@@ -176,14 +248,25 @@ def _reference_html(assessment: Assessment) -> str:
     affect `final`/status (compute_penalties never produces these kinds), and
     when a candidate has none this returns "" -- no group, no placeholder,
     nothing -- so a clean candidate's row carries no trace of it at all.
+
+    This group used to be prefixed with a literal "for reference -- no score
+    effect" label; the hiring manager asked for that text gone. The
+    distinction from penalty chips is now carried entirely by the `.chip.ref`
+    styling in `_CSS` (a dashed border, squared corners, and the `ref-icon`
+    glyph below) -- deliberately not colour alone, so it still holds for a
+    colour-blind reader or a greyscale printout. Do not reintroduce the old
+    label text here; restyle `.chip.ref` instead if the distinction ever
+    needs to be stronger.
     """
     if not assessment.reference_flags:
         return ""
     chips = "".join(
-        f'<span class="chip ref" title="{_e(rf.get("detail"))}">{_e(rf.get("label", rf["kind"]))}</span>'
+        f'<span class="chip ref" title="{_e(rf.get("detail"))}">'
+        f'<span class="ref-icon" aria-hidden="true">◇</span>'
+        f'{_e(rf.get("label", rf["kind"]))}</span>'
         for rf in assessment.reference_flags
     )
-    return f'<div class="ref-group"><span class="ref-tag">for reference — no score effect</span>{chips}</div>'
+    return f'<div class="ref-group">{chips}</div>'
 
 
 def _detail_html(data: ReportInput, cid: int, cfg: RoleConfig) -> str:
@@ -306,8 +389,11 @@ def _candidate_table(data: ReportInput, ids: list[int], cfg: RoleConfig, grey: b
         penalties = (
             f"−{assessment.penalty_total:g}" if assessment.penalty_total else "—"
         )
+        # `.meta-tag`, not `.chip` -- this is bookkeeping furniture, not a
+        # penalty/flag, and must never share styling with the severity chips
+        # in the Flags column (see the `.meta-tag` comment in `_CSS`).
         since = (
-            f'<br><span class="chip">since {_e(entry.first_seen_run)}</span>'
+            f'<br><span class="meta-tag">since {_e(entry.first_seen_run)}</span>'
             if entry and entry.status == "accepted"
             else ""
         )

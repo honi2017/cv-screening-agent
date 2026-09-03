@@ -201,7 +201,7 @@ def test_html_shows_flag_chips():
 # render them in their own neutral group, separate from the penalty-derived
 # chips, and to render nothing at all for a candidate who has none.
 
-def test_html_shows_both_reference_flags_in_their_own_group():
+def _data_with_offshore_and_coverage_reference_flags():
     data = _data()
     data.assessments[1] = _assessment(
         1,
@@ -209,7 +209,7 @@ def test_html_shows_both_reference_flags_in_their_own_group():
         reference_flags=[
             {
                 "kind": "offshore_claim",
-                "label": "offshore/nearshore claim (for reference)",
+                "label": "offshore claim (unverified)",
                 "detail": "1 sentence(s) claim collaboration with a geographically separated team",
                 "sentences": [
                     "Collaborated with offshore engineering teams in Vietnam to "
@@ -224,11 +224,13 @@ def test_html_shows_both_reference_flags_in_their_own_group():
             },
         ],
     )
-    html = render_html(data, CFG)
+    return data
+
+
+def test_html_shows_both_reference_flags_in_their_own_group():
+    html = render_html(_data_with_offshore_and_coverage_reference_flags(), CFG)
     assert 'class="ref-group"' in html
-    assert "for reference" in html.lower()
-    assert "no score effect" in html.lower()
-    assert "offshore/nearshore claim (for reference)" in html
+    assert "offshore claim (unverified)" in html
     assert "claims 7/7 criteria" in html
     # The offshore claim's evidence panel quotes the sentence verbatim -- the
     # sentence IS the point of that flag.
@@ -241,7 +243,53 @@ def test_html_omits_reference_group_entirely_when_none_present():
     # reference-group markup at all -- not an empty group, no group.
     html = render_html(_data(), CFG)
     assert 'class="ref-group"' not in html
-    assert "for reference" not in html.lower()
+    assert 'class="ref-icon"' not in html
+
+
+# --- Explicit request 1: the removed label, and the corrected chip wording --
+#
+# The reference-flag group used to be prefixed with the literal text "for
+# reference -- no score effect" on every row. The hiring manager asked for it
+# gone; the reference/penalty distinction now has to be carried by styling
+# alone (see `_CSS`'s `.chip.ref` comment). Separately, the offshore-claim
+# chip's own wording was misleading: "(for reference)" reads as "a reference
+# was checked", the opposite of the truth -- nothing here is verified.
+
+def test_old_reference_group_label_text_is_gone():
+    html = render_html(_data_with_offshore_and_coverage_reference_flags(), CFG)
+    assert "for reference — no score effect" not in html
+    assert "for reference -- no score effect" not in html
+
+
+def test_offshore_chip_reads_unverified_not_for_reference():
+    html = render_html(_data_with_offshore_and_coverage_reference_flags(), CFG)
+    assert "offshore claim (unverified)" in html
+    assert "offshore/nearshore claim (for reference)" not in html
+    assert "(for reference)" not in html
+
+
+def test_reference_flags_distinguishable_from_penalty_chips_without_colour():
+    """The reference/penalty distinction must survive in black and white.
+
+    Colour alone (the `.chip`/`.chip.ref` colour tokens) is not an acceptable
+    distinguishing cue on its own -- a colour-blind reader and a greyscale
+    printout can't use it. This asserts the actual structural cue used: a
+    `ref-icon` marker element that appears on every reference chip and on
+    none of the ordinary penalty/flag chips.
+    """
+    data = _data_with_offshore_and_coverage_reference_flags()
+    # Candidate 2 already carries an ordinary penalty-derived flag chip
+    # ("no LinkedIn", see `_data()`) alongside candidate 1's reference chips.
+    html = render_html(data, CFG)
+
+    # Structural cue: exactly the two seeded reference flags carry the
+    # ref-icon marker and the "ref" class -- nothing else on the page does.
+    assert html.count('class="ref-icon"') == 2
+    assert html.count('class="chip ref"') == 2
+
+    # The plain penalty-derived chip renders with the bare `.chip` class --
+    # no "ref" class, no icon marker anywhere near it.
+    assert '<span class="chip">no LinkedIn</span>' in html
 
 
 def test_html_shows_per_criterion_quotes_in_detail():

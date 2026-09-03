@@ -307,7 +307,12 @@ def _offshore_claim_reference(precheck: dict[str, Any], cfg: RoleConfig) -> dict
     places = sorted({p for c in claims for p in (c.get("places") or [])})
     return {
         "kind": "offshore_claim",
-        "label": "offshore/nearshore claim (for reference)",
+        # Wording note (presentation-only change): this used to read
+        # "offshore/nearshore claim (for reference)" -- the hiring manager
+        # read "(for reference)" as "a reference was checked", the opposite
+        # of the truth (nothing here is verified; see the `detail` string
+        # below). "(unverified)" says plainly what this is.
+        "label": "offshore claim (unverified)",
         "detail": (
             f"{len(sentences)} sentence(s) claim collaboration with a geographically "
             "separated team -- unverifiable (see code comment), shown for reference "
