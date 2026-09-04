@@ -1,0 +1,91 @@
+{
+  "position_title": "Forward Deployed Engineer, Engineering",
+  "rubric_version": 4,
+  "precheck_rules_version": 2,
+  "cap_fraction": 0.2,
+  "quality_floor_delta": 5,
+  "calibration_window": 5,
+  "bonus_max": 5,
+  "criteria": [
+    {
+      "key": "production_ownership",
+      "label": "Production engineering ownership",
+      "max": 25
+    },
+    {
+      "key": "integration_breadth",
+      "label": "Integration breadth",
+      "max": 20
+    },
+    {
+      "key": "client_solutioning",
+      "label": "Client-facing solutioning",
+      "max": 20
+    },
+    {
+      "key": "communication_product",
+      "label": "Communication & product sense",
+      "max": 15
+    },
+    {
+      "key": "domain",
+      "label": "Domain",
+      "max": 10
+    },
+    {
+      "key": "ai_tooling",
+      "label": "AI/LLM tooling",
+      "max": 5
+    },
+    {
+      "key": "distributed_collab",
+      "label": "Distributed / offshore collaboration",
+      "max": 5
+    }
+  ],
+  "anchors": {
+    "none": 0.0,
+    "claimed": 0.25,
+    "one_example": 0.5,
+    "several_examples": 0.75,
+    "sustained_senior": 1.0
+  },
+  "gates": {
+    "min_years": 4,
+    "tier2_gate_count": 4,
+    "degree_required": false,
+    "intra_dup_jaccard": 0.85,
+    "pool_dup_tier1_count": 4,
+    "skills_count_threshold": 80,
+    "metadata_template_producers": [
+      "canva",
+      "resume.io",
+      "zety",
+      "kickresume",
+      "novoresume",
+      "enhancv",
+      "flowcv"
+    ],
+    "metadata_minutes_threshold": 30,
+    "min_text_chars": 200,
+    "check_linkedin_liveness": true
+  },
+  "penalties": {
+    "no_linkedin": 20,
+    "linkedin_name_mismatch": 8,
+    "tier2_signal": 10,
+    "pool_duplicate": 10,
+    "years_4_to_5": 10,
+    "no_degree": 5,
+    "short_stints": 5,
+    "broad_claims": 10
+  },
+  "tiebreak_timezones": [
+    "ET",
+    "CT"
+  ],
+  "reference_flags": {
+    "offshore_claim": true,
+    "full_criteria_coverage": true
+  }
+}

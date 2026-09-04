@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run python -m screen:*)",
+      "Bash(uv run pytest:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv run python -c:*)",
+      "Read",
+      "Write(data/**)",
+      "Edit(data/**)"
+    ],
+    "deny": [
+      "Read(./.env)"
+    ]
+  }
+}
