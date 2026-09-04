@@ -5,6 +5,38 @@ eliminates carelessly AI-generated CVs, and produces a ranked shortlist capped a
 20 % of the pool. **Report only — it never writes to Trakstar.**
 
 Design: `docs/superpowers/specs/2026-08-27-cv-screening-agent-design.md`
+Known gaps and readiness assessment: `docs/production-readiness-review.md`
+
+## How it fits together
+
+Six stages. **Five are deterministic Python you can run and reason about on its
+own; only the judging stage involves a model.**
+
+| Stage | Command | What it does |
+|---|---|---|
+| fetch | `screen fetch` | Pulls the opening's **active** candidates and CV files. Read-only: the client's one request path hard-codes `GET`. |
+| parse | `screen parse` | PDF/DOCX → markdown, plus hidden-text detection. |
+| precheck | `screen precheck` | Pure detectors — placeholders, duplicate bullets, dates, LinkedIn, location — then **redacts PII**. |
+| *judge* | *(the skill)* | One subagent per candidate scores the redacted CV against the rubric. The only non-deterministic stage. |
+| rank | `screen rank --prepare` / `--finalize` | Applies gates and penalties, enforces the 20 % cap, updates the sticky ledger. |
+| report | `screen report` | Renders HTML, Markdown and CSV. |
+
+Two properties are worth knowing before reading the code, because most of the
+design follows from them:
+
+**Judges never see identity.** `precheck` writes a redacted CV to
+`data/<opening>/redacted/` with names, emails, phones, addresses and school
+names replaced, and that is the only version a judge reads. School names are
+redacted deliberately — institutional prestige is a proxy for socioeconomic
+background, and the rubric must not weigh it.
+
+**A score must quote the CV or it is discarded.** `verdict.py` verifies every
+non-zero criterion score against the CV text verbatim and zeroes any it cannot
+find. A model cannot award points for something the CV does not say.
+
+Where to start reading: `screen/rank.py` for how a candidate becomes a decision,
+`screen/signals.py` for the deterministic detectors, `roles/fde/` for the rubric
+and prompts (all config and copy, no code).
 
 ## Setup
 

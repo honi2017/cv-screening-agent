@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "feat/**"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The suite must never reach the network: tests/conftest.py installs an
+      # autouse fixture that raises on any real transport, so a test that grew
+      # a live HTTP call fails here rather than silently depending on Trakstar
+      # or LinkedIn being reachable. No secrets are needed or granted.
+      - name: Guard against committed credentials or applicant data
+        run: |
+          if git ls-files | grep -qE '^(data|state|report)/|(^|/)\.env$'; then
+            echo "::error::A credential or applicant-data path is tracked. \
+          data/, state/, report/ and .env hold real CVs, names, emails and the \
+          live API key and must stay gitignored."
+            git ls-files | grep -E '^(data|state|report)/|(^|/)\.env$'
+            exit 1
+          fi
+          echo "No credential or applicant-data paths tracked."
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python
+        run: uv python install
+
+      # --frozen fails if uv.lock has drifted from pyproject.toml, so a
+      # dependency added without relocking cannot reach main.
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run tests
+        run: uv run pytest -q

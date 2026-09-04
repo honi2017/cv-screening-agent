@@ -17,14 +17,15 @@ and never a rejected candidate a human has already decided on.
 
 ## 0. Setup
 
-Work from the project root. Read `roles/fde/role.json` only if you need a number;
-the CLI already applies it.
+Work from the repository root — every path below is relative to it. Read
+`roles/fde/role.json` only if you need a number; the CLI already applies it.
 
-```bash
-cd /Users/hung/Coding/Odin/WorkSpace/CVsScanningAgent
-```
+The scheduled job sets its working directory to the repo, and `.env` is loaded
+from the working directory, so do not `cd` to an absolute path: that would break
+this skill for every checkout other than the one it was written on.
 
-Default source is Trakstar. If `TRAKSTAR_API_KEY` is unset, fall back to
+Default source is Trakstar. `TRAKSTAR_API_KEY` comes from the repo-root `.env`
+(loaded automatically) or the environment. If it is unset, fall back to
 `--source folder --path <dir>` and say so in your summary.
 
 ## 1. Fetch, parse, precheck
