@@ -483,6 +483,45 @@ class CutResult:
     rebaseline: bool = False
     unseated: list[int] = field(default_factory=list)
 
+    # --- H2: observational overage guard --------------------------------
+    #
+    # `rank_and_cut` re-seats every previously-accepted candidate (see the
+    # `already_accepted` seeding above) before it ever consults a score --
+    # that stickiness is deliberate: it is what stops the algorithm from
+    # displacing someone the team may already have contacted. But nothing
+    # in that seeding step compares the resulting seated count back against
+    # `cap`, so a pool that shrinks between runs (dropping the cap) can
+    # leave more people sticky-seated than the new cap allows, silently.
+    #
+    # `over_cap` and `accepted_share` below are PURE OBSERVATION: they
+    # measure that gap for the report and the run record to surface, and
+    # they do not feed back into `accepted`, `waitlist`, gating, or the
+    # ledger anywhere in this function. They must never be used to trim or
+    # reorder `accepted` -- that would silently convert a sticky-accept
+    # into an unseat, which is exactly the behaviour `rebaseline=True`
+    # exists to perform explicitly and audibly (see `unseated` above). If
+    # a human decides the overage should be corrected, the remedy is an
+    # explicit `rank --rebaseline` run -- never a change to these
+    # properties.
+    #
+    # Computed as properties, not stored fields: both are fully derived
+    # from `cap`/`accepted`/`pool_size`, which already round-trip through
+    # every `.cut.json` (including ones written before this change), so a
+    # report regenerated for an old run id computes these correctly with
+    # no migration needed.
+    @property
+    def over_cap(self) -> int:
+        """How many more candidates are currently seated than `cap` allows.
+
+        0 when compliant; never negative.
+        """
+        return max(0, len(self.accepted) - self.cap)
+
+    @property
+    def accepted_share(self) -> float:
+        """Accepted as a fraction of `pool_size`. 0.0 for an empty pool."""
+        return len(self.accepted) / self.pool_size if self.pool_size else 0.0
+
 
 def _sort_key(assessment: Assessment, cfg: RoleConfig) -> tuple:
     """Score first; the JD's East-Coast/Midwest preference breaks ties."""

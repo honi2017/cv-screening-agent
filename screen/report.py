@@ -186,6 +186,14 @@ details[open] summary::before { content:"\\25be"; }
 .detail dt { color:var(--muted); } .detail dd { margin:0; }
 blockquote { margin:2px 0 6px; padding:4px 10px; border-left:3px solid var(--line);
              color:#374151; font-style:italic; }
+/* Shared styling for the "the cut is not what a naive reading would
+   suggest" family of warnings -- the permanent inversion guard
+   (`_inversion_html`) and the over-cap guard (`_over_cap_html`) both use
+   this one class via `_cut_guard_note_html` so the two read as the same
+   severity, deliberately pitched above the neutral `.chip.ref` reference
+   chips (this is a real breach of a stated requirement) but below the
+   maroon `.bad`/`.gate` styling (this is a hiring document, informative
+   rather than alarming). */
 .inversion-note { color:var(--warn); font-weight:600; margin:8px 0; }
 footer { margin-top:36px; color:var(--muted); font-size:12px; }
 footer table { max-width:760px; }
@@ -488,6 +496,21 @@ def _inversion_count(data: ReportInput) -> int:
     )
 
 
+def _cut_guard_note_html(message_html: str) -> str:
+    """Shared rendering for the "the cut is not what a naive reading would
+    suggest" family of warnings -- see the `.inversion-note` comment in
+    `_CSS`. Used by both `_inversion_html` and `_over_cap_html` so the two
+    guards can never visually drift apart from each other; restyle
+    `.inversion-note` if either ever needs to look different, rather than
+    having one of the two call sites grow its own markup.
+
+    `message_html` is trusted, pre-built markup, not raw candidate data --
+    both call sites only ever interpolate integers, floats, and static
+    strings into it.
+    """
+    return f'<p class="inversion-note">{message_html}</p>'
+
+
 def _inversion_html(data: ReportInput) -> str:
     """Render nothing at all when there is no inversion -- see
     `_inversion_count`. Right after a re-baseline this is always empty by
@@ -499,9 +522,38 @@ def _inversion_html(data: ReportInput) -> str:
         return ""
     noun = "candidate" if count == 1 else "candidates"
     verb = "scores" if count == 1 else "score"
-    return (
-        f'<p class="inversion-note">{count} waitlisted {noun} {verb} above the '
-        "lowest-scoring accepted candidate — held out by the cap, not by score.</p>"
+    return _cut_guard_note_html(
+        f"{count} waitlisted {noun} {verb} above the "
+        "lowest-scoring accepted candidate — held out by the cap, not by score."
+    )
+
+
+def _over_cap_html(data: ReportInput) -> str:
+    """H2 (docs/production-readiness-review.md): render the sticky-seating
+    overage right beside the shortlist, prominently -- see
+    `CutResult.over_cap`.
+
+    `rank_and_cut` re-seats previously-accepted candidates before consulting
+    any score (deliberate stickiness, not a bug -- see its docstring), so a
+    pool that shrinks between runs can leave more people seated than the
+    current cap allows with nothing else on the page saying so. Renders
+    nothing at all when compliant (`over_cap == 0`); this function only
+    ever reads `cut.over_cap`/`cut.accepted_share`, it never sets them or
+    changes who is accepted -- see the comment on those properties in
+    `screen.rank.CutResult`.
+    """
+    cut = data.cut
+    if cut.over_cap <= 0:
+        return ""
+    accepted_now = len(cut.accepted)
+    pct = f"{cut.accepted_share * 100:.1f}".rstrip("0").rstrip(".")
+    return _cut_guard_note_html(
+        f"{accepted_now} candidates are seated against a cap of {cut.cap} "
+        f"({pct}% of the pool) — {cut.over_cap} over the ceiling. The excess is "
+        "held by previously-accepted candidates who kept their slots under "
+        "sticky acceptance, not by anyone newly added. "
+        "<code>rank --rebaseline</code> recomputes the cut purely on current "
+        "scores, if the team wants that."
     )
 
 
@@ -571,6 +623,7 @@ rubric v{cfg.rubric_version}</p>
 {_delta_html(data)}
 
 <h2>Shortlist</h2>
+{_over_cap_html(data)}
 {_inversion_html(data)}
 {_candidate_table(data, cut.accepted, cfg)}
 
@@ -755,6 +808,14 @@ def write_all(data: ReportInput, cfg: RoleConfig, paths: Paths) -> dict[str, Pat
                 "rubric_version": cfg.rubric_version,
                 "pool_size": data.cut.pool_size,
                 "cap": data.cut.cap,
+                # H2 (docs/production-readiness-review.md): observational
+                # only -- see the comment on these properties in
+                # screen.rank.CutResult. Recorded here so the run record
+                # answers "were we over the cap on this run" on its own,
+                # the same way `rebaseline`/`unseated` below answer "why did
+                # a status change" -- neither one changes `accepted`.
+                "over_cap": data.cut.over_cap,
+                "accepted_share": data.cut.accepted_share,
                 "accepted": data.cut.accepted,
                 "waitlist": data.cut.waitlist,
                 "gated": data.cut.gated,
