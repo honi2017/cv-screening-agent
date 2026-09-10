@@ -575,6 +575,26 @@ def test_broad_claims_flag_and_penalty_agree_for_the_round_metrics_branch():
     assert penalty_fired and flag_fired
 
 
+def test_all_metrics_round_with_narrow_coverage_produces_no_flag_or_penalty():
+    # `_broad_claims_uncorroborated` is a conjunction -- breadth AND something
+    # uncorroborated -- and the breadth half is unguarded for this branch.
+    # `test_five_of_seven_with_no_linkedin_produces_no_flag_or_penalty` above
+    # used to pin it by making the uncorroborated half true via a missing
+    # LinkedIn, but that branch no longer feeds this rule, so it now passes
+    # with BOTH halves false and would not notice `broad and` being dropped
+    # from the return. This pins breadth for the round-metrics branch
+    # specifically: all-round metrics on a candidate who scores on only five
+    # of seven criteria must stay silent.
+    keys = CFG.criterion_keys()
+    scores = {k: CFG.criterion(k).max for k in keys}
+    scores[keys[-1]] = 0
+    scores[keys[-2]] = 0
+    pc = precheck(round_metric_ratio=1.0, metric_count=5)
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+
+
 # --- Reference flags: no score effect, ever -------------------------------
 #
 # See screen.rank._reference_flags for the full rationale. A reference flag

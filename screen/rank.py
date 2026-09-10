@@ -284,10 +284,26 @@ def _all_metrics_round(precheck: dict[str, Any], cfg: RoleConfig) -> bool:
     which is what justified promoting this from an unused stored field to a
     trigger branch.
 
-    An absent or null `round_metric_ratio` (an older precheck written before
-    this field existed) is treated as "does not fire", never as 0.0/1.0 --
-    there is no metric data to judge, so this branch stays silent rather
-    than guessing.
+    Two absences are possible here and both stay silent rather than guess.
+    A null or absent `round_metric_ratio` means there is no metric data to
+    judge, so this branch does not fire -- never treat it as 0.0/1.0. An
+    absent `metric_count` means the precheck predates this field
+    (`build_precheck` gained it in the same change that added this branch),
+    and `int(None or 0)` cannot clear the minimum, so the branch does not
+    fire either.
+
+    That second case is an operational trap, not a theoretical one. The
+    precheck stage reuses a stored payload whenever
+    `precheck_key(pdf_sha256, precheck_rules_version)` is unchanged (see
+    screen.precheck.run_stage), so prechecks written before this change keep
+    their old shape and this branch is silent for those candidates while
+    firing normally for freshly-prechecked ones -- the same rule giving two
+    answers within one pool, with nothing reporting it. Rebuild them with
+    `precheck --force`, which recomputes the payload while leaving
+    `precheck_key` untouched, so the cached judge verdicts stay valid
+    (`screen.verdict.verdict_key` hashes `precheck_key`). Bumping
+    `precheck_rules_version` also rebuilds them, but changes `precheck_key`
+    and therefore invalidates every stored verdict.
     """
     ratio = precheck.get("round_metric_ratio")
     if ratio is None:
