@@ -110,11 +110,29 @@ def power_verb_density(bullets: list[str]) -> float:
     return round(hits / len(bullets), 3)
 
 
+def _bullets_with_metrics(bullets: list[str]) -> list[str]:
+    """Bullets citing a percentage -- the one definition of "a metric" shared
+    by `round_metric_ratio` and `metric_count`. Factored out so the ratio's
+    denominator and the count can never disagree about what counts as a
+    metric; do not give either of them its own regex.
+    """
+    return [b for b in bullets if _ROUND_PCT_RE.search(b)]
+
+
+def metric_count(bullets: list[str]) -> int:
+    """Number of bullets citing a percentage metric -- the same population
+    `round_metric_ratio` computes its ratio over. Consumed by
+    `screen.rank._all_metrics_round` as the minimum-metrics guard: a ratio of
+    1.0 over a single metric means nothing.
+    """
+    return len(_bullets_with_metrics(bullets))
+
+
 def round_metric_ratio(bullets: list[str]) -> float:
     """Of the bullets citing a percentage, the fraction using suspiciously round
     multiples of 5. Real measurements are rarely all round numbers.
     """
-    with_pct = [b for b in bullets if _ROUND_PCT_RE.search(b)]
+    with_pct = _bullets_with_metrics(bullets)
     if not with_pct:
         return 0.0
     round_hits = 0

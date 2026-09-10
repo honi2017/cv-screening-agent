@@ -380,7 +380,7 @@ def test_assess_records_flag_chips_for_report():
     assert a.timezone_hint == "unknown"
 
 
-# --- Fix 2 / Change 3: "broad claims, uncorroborated" -----------------------
+# --- Fix 2 / Change 3 / Change 4: "broad claims, uncorroborated" ------------
 #
 # See the comment in screen.rank.assess for the full history: this was kept
 # as a flag with NO score effect for a while, because the same signal, tried
@@ -388,8 +388,8 @@ def test_assess_records_flag_chips_for_report():
 # real sample. It replaced an earlier "claims all/6-of-7 criteria" flag that
 # measurement showed was near-tautological with the final score (85% of the
 # top 13 by score vs. 11% of the rest). The discriminating pattern is
-# breadth paired with nothing independent corroborating it -- absent
-# LinkedIn or a Tier-2 signal -- not breadth alone.
+# breadth paired with nothing independent corroborating it -- every cited
+# metric being suspiciously round, or a Tier-2 signal -- not breadth alone.
 #
 # Change 3: the hiring team reviewed real output and asked for this signal
 # to carry weight, so it is now ALSO `penalties.broad_claims` -- applied by
@@ -397,19 +397,38 @@ def test_assess_records_flag_chips_for_report():
 # (`screen.rank._broad_claims_uncorroborated`), so the two can never
 # disagree about who they apply to. It is a penalty, never a gate: it must
 # lower a rank, not eliminate anyone.
+#
+# Change 4: the original "uncorroborated" test used `not linkedin_present`
+# instead of the round-metrics test above. That double-charged a fact
+# `no_linkedin` already penalises (see the long comment in
+# screen.rank._broad_claims_uncorroborated for the measurement that killed
+# it) and is now replaced by `_all_metrics_round`. The Tier-2 branch is
+# unchanged, including its deliberate double-count with `tier2_signal`.
 
 
-def test_broad_claims_and_no_linkedin_produces_flag_and_penalty():
+def test_broad_claims_does_not_fire_from_missing_linkedin_alone_regression():
+    # REGRESSION TEST for the double-charge bug: a broad candidate with no
+    # LinkedIn, no Tier-2 flag, and non-round metrics must NOT also pay
+    # `broad_claims` -- that would double-charge the single missing-LinkedIn
+    # fact that `no_linkedin` already prices (see the removed
+    # `not linkedin_present` branch documented in
+    # screen.rank._broad_claims_uncorroborated). The `no_linkedin` penalty
+    # still applies on its own; only the extra, redundant penalty is gone.
     scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # all seven at 100% of max
-    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
+    pc = precheck(
+        linkedin={"present": False, "source": "none", "url": None, "name_matches": None},
+        round_metric_ratio=0.2,  # some metrics, not all round
+        metric_count=5,
+    )
     a = assess(pc, verdict(scores=scores), CFG)
-    assert "broad claims, uncorroborated" in a.flags
+    assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+    # The no-LinkedIn penalty still fires on its own -- this is the "red
+    # flag but not a deal breaker" the hiring team asked for, not zero cost.
+    assert any(p["kind"] == "no_linkedin" for p in a.penalties)
     assert a.gate is None
     assert a.final == round(a.fit + a.bonus - a.penalty_total, 2)
-    # Both the no-LinkedIn penalty AND the new broad_claims penalty apply --
-    # read both values from config rather than hardcoding their sum.
-    assert any(p["kind"] == "broad_claims" for p in a.penalties)
-    assert a.penalty_total == float(CFG.penalties["no_linkedin"] + CFG.penalties["broad_claims"])
+    assert a.penalty_total == float(CFG.penalties["no_linkedin"])
 
 
 def test_six_of_seven_and_tier2_signal_produces_flag_and_penalty():
@@ -446,11 +465,114 @@ def test_five_of_seven_with_no_linkedin_produces_no_flag_or_penalty():
 
 def test_broad_claims_penalty_value_read_from_config():
     scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
-    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
-    pens = compute_penalties(pc, verdict(scores=scores), CFG)
+    flags = [{"tier": 2, "kind": "generic_bullet", "quote": "q", "explanation": "e"}]
+    pens = compute_penalties(precheck(), verdict(flags=flags, scores=scores), CFG)
     broad = [p for p in pens if p["kind"] == "broad_claims"]
     assert len(broad) == 1
     assert broad[0]["points"] == CFG.penalties["broad_claims"]
+
+
+def test_broad_claims_still_fires_via_tier2_branch_and_double_counts_deliberately():
+    # The Tier-2 branch is UNCHANGED by this fix, including its deliberate
+    # double-count with `tier2_signal` (see the "known, accepted overlap"
+    # comment in screen.rank._broad_claims_uncorroborated) -- the hiring
+    # team chose to keep this one, unlike the LinkedIn double-charge, which
+    # was removed.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # all seven at max
+    flags = [{"tier": 2, "kind": "generic_bullet", "quote": "q", "explanation": "e"}]
+    a = assess(precheck(), verdict(flags=flags, scores=scores), CFG)
+    assert "broad claims, uncorroborated" in a.flags
+    assert any(p["kind"] == "broad_claims" for p in a.penalties)
+    assert any(p["kind"] == "tier2_signal" for p in a.penalties)
+    assert a.penalty_total == float(CFG.penalties["broad_claims"] + CFG.penalties["tier2_signal"])
+
+
+# --- Change 4: all-round-metrics branch (replaces the removed LinkedIn one) --
+#
+# See screen.rank._all_metrics_round for the measurement backing this: among
+# candidates with at least three metrics, 12 had every metric round and 9 of
+# those 12 already carried an independent AI-slop or broad-claims flag (75%
+# concordance). The minimum-metric guard is essential: without it, a single
+# round number would trip this rule meaninglessly.
+
+
+def test_broad_claims_fires_when_all_metrics_round_and_minimum_met():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}  # all seven at max
+    pc = precheck(
+        linkedin={"present": True, "source": "trakstar", "url": "u", "name_matches": True},
+        round_metric_ratio=1.0,
+        metric_count=3,  # exactly the configured minimum
+    )
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" in a.flags
+    assert any(p["kind"] == "broad_claims" for p in a.penalties)
+    # No LinkedIn penalty and no Tier-2 signal here -- this candidate is
+    # clean on both of those; the round-metrics branch alone triggers it.
+    assert not any(p["kind"] == "no_linkedin" for p in a.penalties)
+    assert not any(p["kind"] == "tier2_signal" for p in a.penalties)
+
+
+def test_broad_claims_does_not_fire_when_ratio_is_one_but_metric_count_below_minimum():
+    # A CV with a single round-percentage bullet scores ratio 1.0 -- the
+    # minimum-metric guard must stop that from tripping the rule.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(
+        linkedin={"present": True, "source": "trakstar", "url": "u", "name_matches": True},
+        round_metric_ratio=1.0,
+        metric_count=2,  # one below the configured minimum of 3
+    )
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+
+
+def test_broad_claims_null_round_metric_ratio_does_not_fire_round_branch():
+    # An older precheck predating this field (or one where the value is
+    # explicitly null) must be treated as "no metric data", never as if the
+    # ratio were 0.0 or 1.0.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(
+        linkedin={"present": True, "source": "trakstar", "url": "u", "name_matches": True},
+        round_metric_ratio=None,
+        metric_count=10,
+    )
+    a = assess(pc, verdict(scores=scores), CFG)
+    assert "broad claims, uncorroborated" not in a.flags
+    assert not any(p["kind"] == "broad_claims" for p in a.penalties)
+
+
+def test_min_metrics_for_round_ratio_config_key_changes_the_minimum():
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(
+        linkedin={"present": True, "source": "trakstar", "url": "u", "name_matches": True},
+        round_metric_ratio=1.0,
+        metric_count=2,
+    )
+    # At the default minimum of 3, two metrics is not enough.
+    assert not any(p["kind"] == "broad_claims" for p in compute_penalties(pc, verdict(scores=scores), CFG))
+
+    # Lowering the config key to 2 makes the same two metrics enough.
+    lowered = dataclasses.replace(CFG, gates={**CFG.gates, "min_metrics_for_round_ratio": 2})
+    assert any(
+        p["kind"] == "broad_claims" for p in compute_penalties(pc, verdict(scores=scores), lowered)
+    )
+
+
+def test_broad_claims_flag_and_penalty_agree_for_the_round_metrics_branch():
+    # compute_penalties (the score) and assess()'s flag (the report) must
+    # never disagree about who the round-metrics branch applies to -- both
+    # are computed from the one function, _broad_claims_uncorroborated.
+    scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
+    pc = precheck(
+        linkedin={"present": True, "source": "trakstar", "url": "u", "name_matches": True},
+        round_metric_ratio=1.0,
+        metric_count=4,
+    )
+    v = verdict(scores=scores)
+    penalty_fired = any(p["kind"] == "broad_claims" for p in compute_penalties(pc, v, CFG))
+    a = assess(pc, v, CFG)
+    flag_fired = "broad claims, uncorroborated" in a.flags
+    assert penalty_fired and flag_fired
 
 
 # --- Reference flags: no score effect, ever -------------------------------
@@ -495,12 +617,12 @@ def test_full_criteria_coverage_fires_on_broad_and_clean():
 
 
 def test_full_criteria_coverage_does_not_fire_when_broad_claims_penalty_fires():
-    # Same breadth, but no verifiable LinkedIn -- broad_claims fires, so this
+    # Same breadth, but a Tier-2 signal fired -- broad_claims fires, so this
     # situation is already visible and scored; the reference flag must not
     # also fire (it exists for the case the penalty does NOT catch).
     scores = {k: CFG.criterion(k).max for k in CFG.criterion_keys()}
-    pc = precheck(linkedin={"present": False, "source": "none", "url": None, "name_matches": None})
-    a = assess(pc, verdict(scores=scores), CFG)
+    flags = [{"tier": 2, "kind": "generic_bullet", "quote": "q", "explanation": "e"}]
+    a = assess(precheck(), verdict(flags=flags, scores=scores), CFG)
     assert any(p["kind"] == "broad_claims" for p in a.penalties)
     assert not any(f["kind"] == "full_criteria_coverage" for f in a.reference_flags)
 

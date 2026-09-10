@@ -5,6 +5,7 @@ from screen.signals import (
     count_skills,
     find_placeholders,
     intra_cv_duplicates,
+    metric_count,
     power_verb_density,
     round_metric_ratio,
     template_metadata_signal,
@@ -263,6 +264,20 @@ def test_round_metric_ratio_zero_when_no_metrics():
 def test_power_verb_density_and_round_ratio_handle_empty():
     assert power_verb_density([]) == 0.0
     assert round_metric_ratio([]) == 0.0
+
+
+def test_metric_count_matches_round_metric_ratios_denominator():
+    # metric_count and round_metric_ratio must use the same definition of
+    # "a metric" (screen.signals._bullets_with_metrics) -- both counted over
+    # the same bullets citing a percentage.
+    bullets = ["improved by 40%", "reduced by 4.1%", "grew 50%", "owned a service"]
+    assert metric_count(bullets) == 3
+    assert round_metric_ratio(bullets) == round(2 / 3, 3)
+
+
+def test_metric_count_zero_when_no_metrics():
+    assert metric_count(["built a thing", "owned a service"]) == 0
+    assert metric_count([]) == 0
 
 
 def test_count_skills_splits_on_commas_and_pipes():

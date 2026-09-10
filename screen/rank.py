@@ -266,6 +266,37 @@ def _broad_coverage(verdict: dict[str, Any], cfg: RoleConfig) -> bool:
     return high_scoring >= total_criteria - 1
 
 
+def _all_metrics_round(precheck: dict[str, Any], cfg: RoleConfig) -> bool:
+    """True when every metric on the CV is a suspiciously round number AND
+    there are enough of them for that to mean anything.
+
+    `round_metric_ratio` (screen.signals.round_metric_ratio, stored by
+    screen.precheck) is the ratio; `metric_count` is the population it was
+    computed over, using the exact same bullet-matching -- the two are
+    produced by the same function in signals.py so they can never disagree
+    about what a "metric" is. The minimum-metric guard, read from
+    `gates.min_metrics_for_round_ratio`, is essential, not optional: a CV
+    with a single round number (e.g. one "grew 50%" bullet) scores a ratio of
+    1.0 and would otherwise trip this rule meaninglessly. Measured on the
+    real pool: among candidates with at least three metrics, 12 had every
+    metric round, and 9 of those 12 already carried an independent AI-slop or
+    broad-claims flag -- 75% concordance with the judge's separate judgment,
+    which is what justified promoting this from an unused stored field to a
+    trigger branch.
+
+    An absent or null `round_metric_ratio` (an older precheck written before
+    this field existed) is treated as "does not fire", never as 0.0/1.0 --
+    there is no metric data to judge, so this branch stays silent rather
+    than guessing.
+    """
+    ratio = precheck.get("round_metric_ratio")
+    if ratio is None:
+        return False
+    count = int(precheck.get("metric_count") or 0)
+    minimum = int(cfg.gates["min_metrics_for_round_ratio"])
+    return float(ratio) == 1.0 and count >= minimum
+
+
 def _broad_claims_uncorroborated(
     precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
 ) -> bool:
@@ -276,10 +307,35 @@ def _broad_claims_uncorroborated(
     commits to. Computed once here and used for both the `broad_claims`
     penalty (compute_penalties) and the matching report flag (assess) so the
     two can never disagree about which candidates it applies to.
+
+    History of the two branches below:
+
+    The `not linkedin_present` branch that used to live here was REMOVED
+    (this is not an oversight -- do not restore it). It double-charged a
+    fact the rubric already prices: `compute_penalties` separately charges
+    `no_linkedin` (20 points) for the same absent URL, so a single missing
+    LinkedIn profile cost a candidate 30 points through two penalties that
+    were nominally about different things. That broke the hiring team's
+    stated requirement that a missing LinkedIn is "a red flag but not a deal
+    breaker" -- measured on the live pool, every candidate this branch fired
+    on was simultaneously paying `no_linkedin`, and the pool's highest-fit
+    candidate (fit 91) fell to 65 -- below the acceptance cut -- with both
+    penalties traceable to the one missing URL. It is replaced by
+    `_all_metrics_round`: broad coverage plus a CV where every cited metric
+    is suspiciously round is a genuine, independent AI-slop signal (see that
+    function's docstring for the concordance measurement), not a restatement
+    of a fact already penalised elsewhere.
+
+    The Tier-2 branch (`tier2_count(...) >= 1`) is UNCHANGED and still
+    double-counts on purpose: a candidate who fires this branch also pays
+    `tier2_signal` for the same underlying judge flag(s) (see
+    `compute_penalties`). The hiring team reviewed this overlap and chose to
+    keep it deliberately -- broad coverage on top of a judge-flagged CV is
+    treated as worse, not double-counted by accident. This is a known,
+    accepted overlap, not a bug to fix.
     """
     broad = _broad_coverage(verdict, cfg)
-    linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
-    uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
+    uncorroborated = _all_metrics_round(precheck, cfg) or tier2_count(precheck, verdict, cfg) >= 1
     return broad and uncorroborated
 
 
@@ -334,12 +390,13 @@ def _full_criteria_coverage_reference(
     the report has no reason to need this too. This flag exists specifically
     for the case that currently escapes notice entirely: broad coverage on an
     otherwise-clean candidate, which slips past `broad_claims` because that
-    penalty additionally requires no verifiable LinkedIn or at least one
-    Tier-2 signal. A candidate scoring on every criterion with a clean profile
-    and zero flags is either a genuinely excellent match or a well-executed
-    rewrite of the job description, and no amount of document analysis tells
-    those apart -- that's an interview question, not a scoring question,
-    which is exactly why this is reference-only.
+    penalty additionally requires every cited metric to be suspiciously round
+    (see `_all_metrics_round`) or at least one Tier-2 signal. A candidate
+    scoring on every criterion with a clean profile and zero flags is either
+    a genuinely excellent match or a well-executed rewrite of the job
+    description, and no amount of document analysis tells those apart --
+    that's an interview question, not a scoring question, which is exactly
+    why this is reference-only.
     """
     if not cfg.reference_flag_enabled("full_criteria_coverage"):
         return None
@@ -412,11 +469,17 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
     #
     # What actually discriminates is breadth paired with the *absence* of
     # anything independent corroborating it: a CV that ticks nearly every
-    # box, including the rare and specific ones, while offering nothing a
-    # reviewer can check independently (no verifiable LinkedIn) or while
-    # the judge itself flagged something suspicious (a Tier-2 signal). That
+    # box, including the rare and specific ones, while every metric it cites
+    # is a suspiciously round number (see `_all_metrics_round`) or the judge
+    # itself flagged something suspicious (a Tier-2 signal). That
     # combination is what a human reviewer actually caught by eye -- a
-    # top-scoring CV that ticked every box and had no verifiable LinkedIn.
+    # top-scoring CV that ticked every box with nothing independently
+    # checkable behind it.
+    #
+    # (This condition originally used "no verifiable LinkedIn" in place of
+    # the all-metrics-round test above; see `_broad_claims_uncorroborated`'s
+    # docstring for why that branch was removed -- it double-charged a fact
+    # `no_linkedin` already penalises. Do not restore it.)
     #
     # This was KEPT as a flag with NO score effect and NO gate for a while,
     # for the same reason the old generic_summary/jd_language_mirroring
