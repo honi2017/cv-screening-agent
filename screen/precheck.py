@@ -176,6 +176,12 @@ def build_precheck(
         "bullet_count": len(bullets),
         "power_verb_density": signals.power_verb_density(bullets),
         "round_metric_ratio": signals.round_metric_ratio(bullets),
+        # Same bullet population the ratio above is computed over (see
+        # signals.metric_count / signals._bullets_with_metrics) -- stored
+        # alongside it so a consumer never has to guess how many metrics the
+        # ratio was over, and the two can never disagree about what a
+        # "metric" is.
+        "metric_count": signals.metric_count(bullets),
         "template_metadata_signal": signals.template_metadata_signal(
             parsed.meta, minutes, cfg
         ),

@@ -6,6 +6,7 @@ from pathlib import Path
 import httpx
 import pytest
 
+from screen import signals
 from screen.config import load_role
 from screen.parse import parse_pdf, write_parsed
 from screen.paths import Paths
@@ -15,6 +16,7 @@ from screen.precheck import (
     precheck_key,
     run_stage,
 )
+from screen.text import extract_bullets
 
 sys.path.insert(0, str(Path(__file__).parent))
 from fixtures.make_fixtures import build_all  # noqa: E402
@@ -393,3 +395,41 @@ def test_run_stage_rechecks_linkedin_when_url_changed(tmp_path, pdfs):
     # module docstring. What this test actually proves is that the fresh
     # check ran and its result (not the stale cached "live") was stored.
     assert payload["linkedin"]["liveness"] == "unknown"
+
+
+# --- Change 4: metric_count, the producer side of the round-metrics branch --
+#
+# screen.rank._all_metrics_round reads `metric_count` off the stored precheck.
+# Every rank-level test for that branch hands `assess` a hand-built precheck
+# dict, so none of them notices if THIS stage stops emitting the key --
+# renaming or dropping it here leaves the branch permanently silent with a
+# green suite. These two tests pin the key by name, pin it to the same bullet
+# population `round_metric_ratio` divides by, and pin the concrete shape the
+# branch is supposed to fire on.
+
+
+def test_build_precheck_emits_metric_count_matching_the_ratios_denominator(pdfs):
+    parsed = parse_pdf(pdfs["clean"])
+    p, _redacted = build_precheck(CANDIDATE, parsed, CFG, TODAY, [])
+    count = p["metric_count"]
+    assert count == signals.metric_count(extract_bullets(parsed.markdown))
+    assert isinstance(count, int)
+    # The count IS the ratio's denominator, so a zero count and a non-zero
+    # ratio can never coexist.
+    assert count > 0 or p["round_metric_ratio"] == 0.0
+    # The clean CV cites percentages, but as decimals (4.1% to 0.6%), which
+    # are not round -- one metric bullet, ratio 0.0.
+    assert count == 1
+    assert p["round_metric_ratio"] == 0.0
+
+
+def test_build_precheck_on_all_round_metrics_cv_produces_a_firing_shape(pdfs):
+    # The template CV's bullets are all round multiples of 5 (40%, 35%, 50%,
+    # 25%), which is exactly the shape screen.rank._all_metrics_round exists
+    # to catch. This asserts the precheck stage actually hands that branch a
+    # payload it can fire on -- ratio 1.0 AND a count at or above the
+    # configured minimum -- rather than one it silently reads as no data.
+    parsed = parse_pdf(pdfs["template_a"])
+    p, _redacted = build_precheck({**CANDIDATE, "id": 9}, parsed, CFG, TODAY, [])
+    assert p["round_metric_ratio"] == 1.0
+    assert p["metric_count"] >= int(CFG.gates["min_metrics_for_round_ratio"])

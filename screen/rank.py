@@ -266,6 +266,53 @@ def _broad_coverage(verdict: dict[str, Any], cfg: RoleConfig) -> bool:
     return high_scoring >= total_criteria - 1
 
 
+def _all_metrics_round(precheck: dict[str, Any], cfg: RoleConfig) -> bool:
+    """True when every metric on the CV is a suspiciously round number AND
+    there are enough of them for that to mean anything.
+
+    `round_metric_ratio` (screen.signals.round_metric_ratio, stored by
+    screen.precheck) is the ratio; `metric_count` is the population it was
+    computed over, using the exact same bullet-matching -- the two are
+    produced by the same function in signals.py so they can never disagree
+    about what a "metric" is. The minimum-metric guard, read from
+    `gates.min_metrics_for_round_ratio`, is essential, not optional: a CV
+    with a single round number (e.g. one "grew 50%" bullet) scores a ratio of
+    1.0 and would otherwise trip this rule meaninglessly. Measured on the
+    real pool: among candidates with at least three metrics, 12 had every
+    metric round, and 9 of those 12 already carried an independent AI-slop or
+    broad-claims flag -- 75% concordance with the judge's separate judgment,
+    which is what justified promoting this from an unused stored field to a
+    trigger branch.
+
+    Two absences are possible here and both stay silent rather than guess.
+    A null or absent `round_metric_ratio` means there is no metric data to
+    judge, so this branch does not fire -- never treat it as 0.0/1.0. An
+    absent `metric_count` means the precheck predates this field
+    (`build_precheck` gained it in the same change that added this branch),
+    and `int(None or 0)` cannot clear the minimum, so the branch does not
+    fire either.
+
+    That second case is an operational trap, not a theoretical one. The
+    precheck stage reuses a stored payload whenever
+    `precheck_key(pdf_sha256, precheck_rules_version)` is unchanged (see
+    screen.precheck.run_stage), so prechecks written before this change keep
+    their old shape and this branch is silent for those candidates while
+    firing normally for freshly-prechecked ones -- the same rule giving two
+    answers within one pool, with nothing reporting it. Rebuild them with
+    `precheck --force`, which recomputes the payload while leaving
+    `precheck_key` untouched, so the cached judge verdicts stay valid
+    (`screen.verdict.verdict_key` hashes `precheck_key`). Bumping
+    `precheck_rules_version` also rebuilds them, but changes `precheck_key`
+    and therefore invalidates every stored verdict.
+    """
+    ratio = precheck.get("round_metric_ratio")
+    if ratio is None:
+        return False
+    count = int(precheck.get("metric_count") or 0)
+    minimum = int(cfg.gates["min_metrics_for_round_ratio"])
+    return float(ratio) == 1.0 and count >= minimum
+
+
 def _broad_claims_uncorroborated(
     precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig
 ) -> bool:
@@ -276,10 +323,35 @@ def _broad_claims_uncorroborated(
     commits to. Computed once here and used for both the `broad_claims`
     penalty (compute_penalties) and the matching report flag (assess) so the
     two can never disagree about which candidates it applies to.
+
+    History of the two branches below:
+
+    The `not linkedin_present` branch that used to live here was REMOVED
+    (this is not an oversight -- do not restore it). It double-charged a
+    fact the rubric already prices: `compute_penalties` separately charges
+    `no_linkedin` (20 points) for the same absent URL, so a single missing
+    LinkedIn profile cost a candidate 30 points through two penalties that
+    were nominally about different things. That broke the hiring team's
+    stated requirement that a missing LinkedIn is "a red flag but not a deal
+    breaker" -- measured on the live pool, every candidate this branch fired
+    on was simultaneously paying `no_linkedin`, and the pool's highest-fit
+    candidate (fit 91) fell to 65 -- below the acceptance cut -- with both
+    penalties traceable to the one missing URL. It is replaced by
+    `_all_metrics_round`: broad coverage plus a CV where every cited metric
+    is suspiciously round is a genuine, independent AI-slop signal (see that
+    function's docstring for the concordance measurement), not a restatement
+    of a fact already penalised elsewhere.
+
+    The Tier-2 branch (`tier2_count(...) >= 1`) is UNCHANGED and still
+    double-counts on purpose: a candidate who fires this branch also pays
+    `tier2_signal` for the same underlying judge flag(s) (see
+    `compute_penalties`). The hiring team reviewed this overlap and chose to
+    keep it deliberately -- broad coverage on top of a judge-flagged CV is
+    treated as worse, not double-counted by accident. This is a known,
+    accepted overlap, not a bug to fix.
     """
     broad = _broad_coverage(verdict, cfg)
-    linkedin_present = bool((precheck.get("linkedin") or {}).get("present"))
-    uncorroborated = (not linkedin_present) or tier2_count(precheck, verdict, cfg) >= 1
+    uncorroborated = _all_metrics_round(precheck, cfg) or tier2_count(precheck, verdict, cfg) >= 1
     return broad and uncorroborated
 
 
@@ -334,12 +406,13 @@ def _full_criteria_coverage_reference(
     the report has no reason to need this too. This flag exists specifically
     for the case that currently escapes notice entirely: broad coverage on an
     otherwise-clean candidate, which slips past `broad_claims` because that
-    penalty additionally requires no verifiable LinkedIn or at least one
-    Tier-2 signal. A candidate scoring on every criterion with a clean profile
-    and zero flags is either a genuinely excellent match or a well-executed
-    rewrite of the job description, and no amount of document analysis tells
-    those apart -- that's an interview question, not a scoring question,
-    which is exactly why this is reference-only.
+    penalty additionally requires every cited metric to be suspiciously round
+    (see `_all_metrics_round`) or at least one Tier-2 signal. A candidate
+    scoring on every criterion with a clean profile and zero flags is either
+    a genuinely excellent match or a well-executed rewrite of the job
+    description, and no amount of document analysis tells those apart --
+    that's an interview question, not a scoring question, which is exactly
+    why this is reference-only.
     """
     if not cfg.reference_flag_enabled("full_criteria_coverage"):
         return None
@@ -412,11 +485,17 @@ def assess(precheck: dict[str, Any], verdict: dict[str, Any], cfg: RoleConfig) -
     #
     # What actually discriminates is breadth paired with the *absence* of
     # anything independent corroborating it: a CV that ticks nearly every
-    # box, including the rare and specific ones, while offering nothing a
-    # reviewer can check independently (no verifiable LinkedIn) or while
-    # the judge itself flagged something suspicious (a Tier-2 signal). That
+    # box, including the rare and specific ones, while every metric it cites
+    # is a suspiciously round number (see `_all_metrics_round`) or the judge
+    # itself flagged something suspicious (a Tier-2 signal). That
     # combination is what a human reviewer actually caught by eye -- a
-    # top-scoring CV that ticked every box and had no verifiable LinkedIn.
+    # top-scoring CV that ticked every box with nothing independently
+    # checkable behind it.
+    #
+    # (This condition originally used "no verifiable LinkedIn" in place of
+    # the all-metrics-round test above; see `_broad_claims_uncorroborated`'s
+    # docstring for why that branch was removed -- it double-charged a fact
+    # `no_linkedin` already penalises. Do not restore it.)
     #
     # This was KEPT as a flag with NO score effect and NO gate for a while,
     # for the same reason the old generic_summary/jd_language_mirroring
@@ -482,6 +561,45 @@ class CutResult:
     # `rebaseline` parameter on `rank_and_cut` below for what these mean.
     rebaseline: bool = False
     unseated: list[int] = field(default_factory=list)
+
+    # --- H2: observational overage guard --------------------------------
+    #
+    # `rank_and_cut` re-seats every previously-accepted candidate (see the
+    # `already_accepted` seeding above) before it ever consults a score --
+    # that stickiness is deliberate: it is what stops the algorithm from
+    # displacing someone the team may already have contacted. But nothing
+    # in that seeding step compares the resulting seated count back against
+    # `cap`, so a pool that shrinks between runs (dropping the cap) can
+    # leave more people sticky-seated than the new cap allows, silently.
+    #
+    # `over_cap` and `accepted_share` below are PURE OBSERVATION: they
+    # measure that gap for the report and the run record to surface, and
+    # they do not feed back into `accepted`, `waitlist`, gating, or the
+    # ledger anywhere in this function. They must never be used to trim or
+    # reorder `accepted` -- that would silently convert a sticky-accept
+    # into an unseat, which is exactly the behaviour `rebaseline=True`
+    # exists to perform explicitly and audibly (see `unseated` above). If
+    # a human decides the overage should be corrected, the remedy is an
+    # explicit `rank --rebaseline` run -- never a change to these
+    # properties.
+    #
+    # Computed as properties, not stored fields: both are fully derived
+    # from `cap`/`accepted`/`pool_size`, which already round-trip through
+    # every `.cut.json` (including ones written before this change), so a
+    # report regenerated for an old run id computes these correctly with
+    # no migration needed.
+    @property
+    def over_cap(self) -> int:
+        """How many more candidates are currently seated than `cap` allows.
+
+        0 when compliant; never negative.
+        """
+        return max(0, len(self.accepted) - self.cap)
+
+    @property
+    def accepted_share(self) -> float:
+        """Accepted as a fraction of `pool_size`. 0.0 for an empty pool."""
+        return len(self.accepted) / self.pool_size if self.pool_size else 0.0
 
 
 def _sort_key(assessment: Assessment, cfg: RoleConfig) -> tuple:

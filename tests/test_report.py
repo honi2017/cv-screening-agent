@@ -584,6 +584,36 @@ def test_inversion_line_counts_every_waitlisted_candidate_above_the_floor():
     assert "2 waitlisted candidates score above" in html
 
 
+# --- H2: the over-cap guard --------------------------------------------------
+#
+# docs/production-readiness-review.md finding H2: sticky acceptance can seat
+# more candidates than the current cap allows with nothing on the page
+# saying so. `_data()`'s default fixture is compliant (cap=1, one accepted),
+# so these tests widen `accepted` past `cap` in place (CutResult's list
+# fields are mutable even though the dataclass itself is frozen) to create
+# an overage, the same technique the rank-column test above uses.
+
+def test_over_cap_note_absent_when_compliant():
+    html = render_html(_data(), CFG)
+    assert "seated against a cap of" not in html
+    assert "over the ceiling" not in html
+
+
+def test_over_cap_note_renders_the_count_cap_and_percentage_when_over():
+    data = _data()
+    # cap stays 1; accepted now holds two of the five scored candidates --
+    # one over the ceiling, out of a pool of 6 (33.3%).
+    data.cut.accepted[:] = [1, 2]
+    html = render_html(data, CFG)
+    assert 'class="inversion-note"' in html
+    assert "2 candidates are seated against a cap of 1" in html
+    assert "33.3% of the pool" in html
+    assert "1 over the ceiling" in html
+    assert "previously-accepted candidates who kept their slots" in html
+    assert "not by anyone newly added" in html
+    assert "rank --rebaseline" in html
+
+
 # --- Markdown ---------------------------------------------------------------
 
 def test_markdown_is_short_and_has_the_numbers():

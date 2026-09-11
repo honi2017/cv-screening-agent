@@ -410,3 +410,80 @@ def test_rebaseline_off_by_default_and_unseated_empty_when_no_ledger():
     result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
     assert result.rebaseline is False
     assert result.unseated == []
+
+
+# --- H2: observational over-cap guard ---------------------------------------
+#
+# docs/production-readiness-review.md, finding H2: sticky acceptance can
+# silently seat more candidates than the current cap allows, and nothing
+# compared the seated count against it. `over_cap`/`accepted_share` are
+# PURE OBSERVATION -- see the comment on those properties in
+# screen.rank.CutResult -- so every test below checks that computing them
+# reports the truth without ever changing who ends up accepted.
+
+
+def test_over_cap_is_zero_when_accepted_is_at_the_cap():
+    assessments = {i: a(i, 100 - i) for i in range(1, 11)}  # cap = floor(0.2*10) = 2
+    result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
+    assert result.cap == 2
+    assert len(result.accepted) == 2
+    assert result.over_cap == 0
+
+
+def test_over_cap_is_zero_when_accepted_is_below_the_cap():
+    # Tiny pool: cap floor(0.2*4) = 0, nobody accepted -- still not negative,
+    # still zero.
+    assessments = {i: a(i, 90) for i in range(1, 5)}
+    result = rank_and_cut(assessments, {}, CFG, "run-1", {}, set())
+    assert result.cap == 0
+    assert result.accepted == []
+    assert result.over_cap == 0
+
+
+def test_over_cap_and_accepted_share_reflect_a_shrunk_pool_with_sticky_overage():
+    """The real scenario H2 exists for: a pool that shrinks between runs drops
+    the cap, but every previously-accepted candidate who is still active gets
+    re-seated regardless (deliberate stickiness). Here: 5 accepted of a pool
+    of 24, cap floor(0.2*24) = 4 -- one over the ceiling, 20.8% of the pool.
+    """
+    ledger = {i: entry(i, "accepted", 90.0 - i, run="run-0") for i in range(1, 6)}
+    assessments = {i: a(i, 90.0 - i) for i in range(1, 25)}  # ids 1..24
+
+    result = rank_and_cut(assessments, ledger, CFG, "run-2", {}, set())
+
+    assert result.pool_size == 24
+    assert result.cap == 4
+    assert len(result.accepted) == 5  # sticky-seated, not truncated to the cap
+    assert result.over_cap == 1
+    assert result.accepted_share == 5 / 24
+
+
+def test_computing_over_cap_does_not_change_who_is_accepted_or_their_scores():
+    """The property that matters most: adding `over_cap`/`accepted_share`
+    must not change a single acceptance decision or score. A bug that turned
+    this "observe the overage" field into "enforce the overage" (e.g.
+    silently truncating `accepted` down to `cap`) would both unseat people
+    with no `--rebaseline` and hide the very breach this field exists to
+    report (`over_cap` would read 0 instead of 1). This asserts the accepted
+    set and every ledger `final` exactly as an unaware caller -- one that
+    never reads `over_cap`/`accepted_share` at all -- would see them, using
+    the same pool as the test above.
+    """
+    ledger = {i: entry(i, "accepted", 90.0 - i, run="run-0") for i in range(1, 6)}
+    assessments = {i: a(i, 90.0 - i) for i in range(1, 25)}
+    expected_finals = {cid: assessment.final for cid, assessment in assessments.items()}
+
+    result = rank_and_cut(assessments, ledger, CFG, "run-2", {}, set())
+
+    assert set(result.accepted) == {1, 2, 3, 4, 5}
+    assert len(result.accepted) == 5
+    # `rank_and_cut` mutates `ledger` in place, adding a fresh entry for
+    # every pool member (ids 6..24 here) -- check the sticky-accepted five
+    # specifically, since they're the ones the overage is about.
+    for cid in range(1, 6):
+        assert ledger[cid].final == expected_finals[cid]
+        assert ledger[cid].status == "accepted"
+    # The observation itself is still correct -- proving the two never traded
+    # off against each other.
+    assert result.over_cap == 1
+    assert result.accepted_share == 5 / 24

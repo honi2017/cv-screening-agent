@@ -68,7 +68,8 @@
     ],
     "metadata_minutes_threshold": 30,
     "min_text_chars": 200,
-    "check_linkedin_liveness": true
+    "check_linkedin_liveness": true,
+    "min_metrics_for_round_ratio": 3
   },
   "penalties": {
     "no_linkedin": 20,
